@@ -766,20 +766,23 @@ let pinchFrame=null,pinchTarget=null;
 function placeLens(value){const index=window.nativeCameraState.lenses.indexOf(value);tools.style.setProperty('--active-slot',String(Math.max(0,index)))}
 glideZoom=value=>{
     if(!hardwareReady()||!window.nativeCameraState.lenses.includes(value))return;
-    if(pinchFrame!==null){cancelAnimationFrame(pinchFrame);pinchFrame=null}
+    if(pinchFrame!==null){cancelAnimationFrame(pinchFrame);pinchFrame=null;pinchTarget=null}
     pendingLens=value;placeLens(value);clearTimeout(lensTimeout);
     lensTimeout=setTimeout(()=>{pendingLens=null;placeLens(Math.max(...window.nativeCameraState.lenses.filter(z=>z<=zoom+.001)))},650);
     send('zoom',{value})
 };
+function flushPinch(){
+    pinchFrame=null;
+    const value=pinchTarget,state=window.nativeCameraState;
+    pinchTarget=null;
+    if(value===null||!hardwareReady(state)||!state.lenses.length)return;
+    send('zoom',{value:Math.min(15,Math.max(Math.min(...state.lenses),value))});
+    pinchFrame=requestAnimationFrame(flushPinch)
+}
 reviewZoom=value=>{
     if(!Number.isFinite(value)||!hardwareReady())return;
     pinchTarget=value;
-    if(pinchFrame!==null)return;
-    pinchFrame=requestAnimationFrame(()=>{
-        pinchFrame=null;
-        const state=window.nativeCameraState;
-        if(hardwareReady(state)&&state.lenses.length)send('zoom',{value:Math.min(15,Math.max(Math.min(...state.lenses),pinchTarget))})
-    })
+    if(pinchFrame===null)flushPinch()
 };
 window.receiveCamera=state=>{
     const prev=window.nativeCameraState,oldNight=nightMode,oldCodec=previewCodec;
