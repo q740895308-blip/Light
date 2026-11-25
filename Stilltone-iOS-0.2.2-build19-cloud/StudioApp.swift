@@ -6,6 +6,7 @@ import CoreImage
 import WebKit
 import AVFoundation
 import UniformTypeIdentifiers
+import AVKit
 
 
 private struct OfflineStudio: UIViewRepresentable {
