@@ -197,8 +197,8 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
         let suffix: String
         var movie: URL?
         let thumbnail: UIImage?
-        var alternateRAW: Data? = nil
         let id: UUID
+        var alternateRAW: Data? = nil
     }
     private var pendingFolder: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -423,7 +423,6 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
                 let available = changed.isFlashAvailable && self.photos.supportedFlashModes.contains(.on)
                 DispatchQueue.main.async { self.flashAvailable = available }
             }
-            self.preparePhotoFormat(next.device)
         }
         if liveObservation == nil {
             liveObservation = photos.observe(\.isLivePhotoCaptureSuspended, options:[.new]) { [weak self] output, _ in
@@ -532,6 +531,7 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
         if next !== old {
             self.session.removeInput(old)
             guard self.session.canAddInput(next) else { self.session.addInput(old); self.orient(); self.report("此镜头不可用"); return }; self.session.addInput(next)
+            self.preparePhotoFormat(next.device)
         }
         do {
             let device = next.device, factor = min(next.device.maxAvailableVideoZoomFactor,max(next.device.minAvailableVideoZoomFactor,CGFloat(value/base)))
