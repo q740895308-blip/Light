@@ -175,7 +175,7 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
         let candidates = device.formats.filter { format in
             let sizes = Set(format.supportedMaxPhotoDimensions.map { mp($0) }); return sizes.contains(12) && sizes.contains(48)
         }
-        guard let format = candidates.first(where:{CMFormatDescriptionGetDimensions($0.formatDescription).width == CMFormatDescriptionGetDimensions(device.activeFormat.formatDescription).width}) ?? candidates.first else {return}
+        guard let format = candidates.first(where:{CMVideoFormatDescriptionGetDimensions($0.formatDescription).width == CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription).width}) ?? candidates.first else {return}
         do { try device.lockForConfiguration(); defer { device.unlockForConfiguration() };device.activeFormat = format } catch { report(error.localizedDescription) }
     }
     private func mainZoom(_ device: AVCaptureDevice)->Bool {
