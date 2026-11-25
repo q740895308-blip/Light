@@ -19,7 +19,7 @@ jobs:
         run: |
           set -euo pipefail
           xcodebuild \
-            -project Stilltone-iOS-0.2.2-build8-cloud/FL-Camera.xcodeproj \
+            -project Stilltone-iOS-0.2.2-build14-cloud/FL-Camera.xcodeproj \
             -target FLCamera -configuration Release -sdk iphoneos \
             ARCHS=arm64 CODE_SIGNING_ALLOWED=NO \
             CONFIGURATION_BUILD_DIR="$RUNNER_TEMP/device" build
