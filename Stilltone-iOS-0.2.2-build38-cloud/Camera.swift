@@ -467,7 +467,7 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
     private var requestedThumbnailLooks: [Look] = []
     private var atlasRequest: ((String?) -> Void)?
     private var thumbnailGeneration: UInt64 = 0
-    private var nextThumbnailTime = 0.0
+    private var lastThumbnailTime = -Double.infinity
     private var lastThumbnailPTS = CMTime.invalid
     func setNativeThumbnailLooks(_ looks: [Look]) {
         lock.lock(); defer { lock.unlock() }
@@ -715,6 +715,7 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
     private func suspendPreviewFrames() {
         lock.lock()
         acceptingPreviewFrames = false; latest = nil; lastDisplayBuffer = nil; waitingForPreview = nil
+        lastThumbnailPTS = .invalid; lastThumbnailTime = -.infinity
         previewSourceGeneration &+= 1
         lock.unlock()
     }
@@ -992,14 +993,21 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
     }
     // The opening request and capture delegate reserve the same single worker under lock.
     private func scheduleThumbnailsLocked(_ buffer: CVPixelBuffer, pts: CMTime, now: Double) {
-        guard !thumbnailRendering, nativeThumbnails || atlasRequest != nil, now >= nextThumbnailTime,
-              !pts.isNumeric || !lastThumbnailPTS.isNumeric || CMTimeCompare(pts,lastThumbnailPTS) != 0 else { return }
+        guard !thumbnailRendering, nativeThumbnails || atlasRequest != nil else { return }
+        let thermal = ProcessInfo.processInfo.thermalState
+        let maximumRate: Double = thermal == .serious || thermal == .critical ? 12 : 60
+        let minimumInterval = 1 / maximumRate - 0.00025
+        if pts.isNumeric && lastThumbnailPTS.isNumeric {
+            let order = CMTimeCompare(pts,lastThumbnailPTS)
+            guard order != 0 else { return }
+            // A new clock epoch or a timestamp reset starts a fresh capture timeline.
+            if pts.epoch == lastThumbnailPTS.epoch && order > 0 &&
+                CMTimeSubtract(pts,lastThumbnailPTS).seconds < minimumInterval { return }
+        } else if now - lastThumbnailTime < minimumInterval { return }
         let recipe = selected, generation = thumbnailGeneration, source = previewSourceGeneration, deliver = atlasRequest
         let edge: CGFloat = deliver == nil ? 224 : requestedThumbnailEdge
         let looks = deliver == nil ? nativeThumbnailLooks : requestedThumbnailLooks
-        let thermal = ProcessInfo.processInfo.thermalState
-        let fps: Double = thermal == .serious || thermal == .critical ? 12 : 30
-        atlasRequest = nil; thumbnailRendering = true; lastThumbnailPTS = pts; nextThumbnailTime = now + 1.0/fps - 0.002
+        atlasRequest = nil; thumbnailRendering = true; lastThumbnailPTS = pts; lastThumbnailTime = now
         thumbnailQueue.async { autoreleasepool {
             let batch = self.renderThumbnailBatch(buffer, recipe:recipe, generation:generation, source:source, edge:edge, looks:looks, forWeb:deliver != nil)
             DispatchQueue.main.async {
