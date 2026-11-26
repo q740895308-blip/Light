@@ -197,12 +197,12 @@ const {verifyMenuDismissal}=require('./menu-dismissal.cjs');
                     if(targetStyle.animationName!=='capsule-rebound')throw Error('missing visible capsule rebound');
                     const duration=parseFloat(targetStyle.animationDuration)*1000;
                     const probe=document.createElement('style');document.head.append(probe);
-                    const selector='.native-camera .mode.dock-rebound[role=group]::before';
+                    const pillSelector='.native-camera .mode.dock-rebound[role=group]::before';
                     const frames=[.19,.51,.79,1].map(fraction=>{
                         // Restart paused so time spent rendering earlier frames never enters the sample.
-                        probe.textContent=selector+'{animation-name:none!important}';
+                        probe.textContent=pillSelector+'{animation-name:none!important}';
                         if(getComputedStyle(modeStrip,'::before').animationName!=='none')throw Error('capsule clock did not reset');
-                        probe.textContent=selector+'{animation-play-state:paused!important;animation-delay:-'+duration*fraction+'ms!important}';
+                        probe.textContent=pillSelector+'{animation-play-state:paused!important;animation-delay:-'+duration*fraction+'ms!important}';
                         const matrix=new DOMMatrixReadOnly(getComputedStyle(modeStrip,'::before').transform);
                         return [matrix.a,matrix.d]
                     });
