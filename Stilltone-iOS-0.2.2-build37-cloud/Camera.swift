@@ -124,7 +124,7 @@ enum Look: String, CaseIterable {
         case .chrome: return "富士 CC"
         case .astia: return "ASTIA"
         case .eterna: return "ETERNA"
-        case .eternaBypass: return "ETERNA BYPASS"
+        case .eternaBypass: return "ETERNA Bypass"
         case .nos: return "NOS"
         case .proNegHi: return "PRO Neg. Hi"
         case .proNegStd: return "PRO Neg. Std"

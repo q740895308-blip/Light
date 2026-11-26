@@ -65,12 +65,18 @@ function parse(html,root){const stack=[root];for(const [token] of html.matchAll(
     for(const [,key,value] of attrs.matchAll(/([^\s=]+)(?:="([^"]*)")?/g))n.setAttribute(key,value??'');
     if(!voidTags.has(tag)&&!token.endsWith('/>'))stack.push(n)
 }}
+function lutEntries(html){
+    return [...html.matchAll(/<script id="(lut-[^"]+)" type="application\/json">([^<]*)<\/script>/g)]
+        .map(match=>[match[1],match[2]]);
+}
 function boot(html,{native=true,landscape=false,touch=true}={}){
     const doc=new Element('document');doc.body=new Element('body');doc.head=new Element('head');doc.append(doc.head,doc.body);
     doc.createElement=tag=>new Element(tag);doc.getElementById=id=>doc.querySelector('#'+id);
-    const markup=html.slice(html.indexOf('<main'),html.indexOf('<script id="assets"'));assert.ok(markup.startsWith('<main'),'camera markup missing');parse(markup,doc.body);
-    const start=html.indexOf('</script><script>'),end=html.lastIndexOf('</script>');assert.ok(start>=0&&end>start,'inline camera script missing');const source=html.slice(start+'</script><script>'.length,end);
-    const assets=doc.createElement('script');assets.id='assets';assets.textContent=html.slice(html.indexOf('>',html.indexOf('<script id="assets"'))+1,start);doc.body.append(assets);
+    const markup=html.slice(html.indexOf('<main'),html.indexOf('</main>')+7);assert.ok(markup.startsWith('<main'),'camera markup missing');parse(markup,doc.body);
+    const start=html.indexOf('<script>'),end=html.lastIndexOf('</script>');assert.ok(start>=0&&end>start,'inline camera script missing');const source=html.slice(start+'<script>'.length,end);
+    for(const [id,text] of lutEntries(html)){
+        const tag=doc.createElement('script');tag.id=id;tag.textContent=text;doc.body.append(tag);
+    }
     const messages=[],intervals=new Map(),timeouts=new Map();let id=0,clock=1000;
     const host={document:doc,atob:s=>Buffer.from(s,'base64').toString('latin1'),navigator:{userAgent:touch?'iPhone':'Desktop',maxTouchPoints:touch?1:0},
         screen:{orientation:{type:landscape?'landscape-primary':'portrait-primary',addEventListener(){}}},innerWidth:landscape?800:390,innerHeight:landscape?390:800,
@@ -91,4 +97,4 @@ function boot(html,{native=true,landscape=false,touch=true}={}){
         shutter(){doc.getElementById('shutter').click()}
     }
 }
-module.exports={boot};
+module.exports={boot,lutEntries};

@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const {boot} = require('./camera-ui-dom.cjs');
+const {boot,lutEntries} = require('./camera-ui-dom.cjs');
 const read = file => fs.readFileSync(path.join(__dirname,'..',file),'utf8');
 {
     const page = boot(read('FL-Camera-Review.html'));
@@ -64,8 +64,8 @@ t.run('topFlash').click();assert.equal(t.messages.filter(m=>m.type==='night').at
 t.report({...state,savedID:'asset1'});assert.equal(t.doc.getElementById('state').textContent,'已保存到系统照片');
 console.log('PASS: night changes before shutter and confirmed save updates status');
 const html=read('Stilltone-Album.html');
-const script=html.match(/<\/script><script>([\s\S]*?)<\/script>/)[1];
-const assets=html.match(/<script id="assets" type="application\/json">([\s\S]*?)<\/script>/)[1];
+const script=html.match(/<script>([\s\S]*?)<\/script>/)[1];
+const assets=lutEntries(html);
 const Element=t.doc.constructor;
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 const records=new Map();
@@ -74,7 +74,8 @@ function page(){
     const doc=new Element('document');doc.body=new Element('body');doc.body.setAttribute('data-album','');
     doc.head=new Element('head');doc.append(doc.head,doc.body);
     doc.head.appendChild=n=>{doc.head.append(n);return n};
-    doc.getElementById=()=>({textContent:assets});
+    const payloads=new Map(assets.map(([id,textContent])=>[id,{textContent}]));
+    doc.getElementById=id=>payloads.get(id);
     let picker;
     doc.createElement=tag=>{
         const el=new Element(tag);

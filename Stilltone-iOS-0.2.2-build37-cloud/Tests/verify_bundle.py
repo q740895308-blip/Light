@@ -63,17 +63,21 @@ def check():
 
     for page in PAGES:
         text = (ROOT / page).read_text(encoding="utf-8")
-        m = re.search(r'<script id="assets" type="application/json">(.*?)</script>', text, re.S)
-        require(m, "missing assets: " + page)
-        assets = json.loads(m[1]); require(set(assets) == LUTS, "LUT names: " + page)
-        for name, entry in assets.items():
+        tags = re.compile(r'<script id="lut-([^"]+)" type="application/json">([^<]+)</script>')
+        seen = set()
+        for match in tags.finditer(text):
+            name, payload = match.groups()
+            require(name in LUTS and name not in seen, "unknown or duplicate LUT: " + name)
+            seen.add(name)
+            entry = json.loads(payload)
             raw = (ROOT / (name + ".rgba")).read_bytes()
             grid = 65 if name.startswith("Fuji-") else 33
             require(entry.get("size", 33) == grid, f"{page} declares the wrong grid for {name}")
             require(len(raw) == grid**3 * 4 * 4, "wrong LUT dimension: " + name)
             require(base64.b64decode(entry["data"], validate=True) == raw, f"{page} differs from native {name}")
             require(hashlib.sha256(raw).hexdigest() == entry["sha256"], f"wrong digest: {page} {name}")
-        print(f"PASS: all {len(assets)} embedded LUTs in {page} equal the bundled native LUTs byte-for-byte")
+        require(seen == LUTS, f"{page} missing LUTs: {LUTS - seen}")
+        print(f"PASS: all {len(seen)} embedded LUTs in {page} equal the bundled native LUTs byte-for-byte")
 
     workflow = (ROOT / ".github/workflows/ipa.yml").read_text(encoding="utf-8")
     require(f"Stilltone-{VERSION}-build{BUILD}-unsigned" in workflow, "workflow artifact version")
