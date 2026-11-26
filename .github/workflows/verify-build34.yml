@@ -21,6 +21,7 @@ jobs:
           node Tests/build17.test.cjs
           node Tests/build18.test.cjs
           node Tests/thumbnail-receiver.cjs
+          node Tests/thumbnail-scheduler.cjs
           node Tests/capture-lifecycle.cjs
           node Tests/photo-dimensions.cjs
       - name: Verify touch layout in WebKit

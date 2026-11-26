@@ -248,12 +248,16 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
         center.addObserver(self, selector: #selector(runtimeError(_:)), name: AVCaptureSession.runtimeErrorNotification, object: session)
     }
     @objc private func interrupted() {
-        capture.async { DispatchQueue.main.async { self.ready = false; self.macroVisible = false } }
+        capture.async {
+            self.suspendPreviewFrames()
+            DispatchQueue.main.async { self.ready = false; self.macroVisible = false }
+        }
     }
     @objc private func resumeAfterInterruption() { capture.async { if self.active { self.authorize() } } }
     @objc private func runtimeError(_ notification: Notification) {
         let error = notification.userInfo?[AVCaptureSessionErrorKey] as? AVError
         capture.async {
+            self.suspendPreviewFrames()
             DispatchQueue.main.async { self.ready = false }
             if self.active && error?.code == .mediaServicesWereReset { self.authorize() }
             else if self.active { self.report(error?.localizedDescription ?? "相机会话已中断，请重新进入拍摄页面。") }
@@ -384,8 +388,14 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
         guard enabled != nativeThumbnails else { return }
         nativeThumbnails = enabled; thumbnailGeneration &+= 1
     }
-    func requestThumbnailAtlas(edge: Int, _ completion: @escaping (String?) -> Void) {
-        lock.lock(); requestedThumbnailEdge = CGFloat(min(384, max(96, edge))); atlasRequest = completion; lock.unlock()
+    func requestThumbnailAtlas(edge: Int, useLatest: Bool = false, _ completion: @escaping (String?) -> Void) {
+        lock.lock(); defer { lock.unlock() }
+        requestedThumbnailEdge = CGFloat(min(384, max(96, edge)))
+        atlasRequest = completion
+        let now = CACurrentMediaTime()
+        guard useLatest, acceptingPreviewFrames, expectedPreviewPosition == nil,
+              let buffer = lastDisplayBuffer, lastDisplayPTS.isNumeric, now - lastDisplayTime <= 0.12 else { return }
+        scheduleThumbnailsLocked(buffer, pts:lastDisplayPTS, now:now)
     }
     func cancelThumbnailAtlas() {
         lock.lock(); defer { lock.unlock() }
@@ -410,8 +420,8 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
         }
         return thumbnailRenderer.context.createCGImage(atlas, from:strip)
     }
-    private func renderThumbnailBatch(_ buffer: CVPixelBuffer, recipe: Recipe, generation: UInt64, edge: CGFloat, forWeb: Bool) -> (jpeg: String?, tiles: [Look:UIImage]) {
-        func isCurrent() -> Bool { lock.lock(); defer { lock.unlock() }; return generation == thumbnailGeneration }
+    private func renderThumbnailBatch(_ buffer: CVPixelBuffer, recipe: Recipe, generation: UInt64, source: UInt64, edge: CGFloat, forWeb: Bool) -> (jpeg: String?, tiles: [Look:UIImage]) {
+        func isCurrent() -> Bool { lock.lock(); defer { lock.unlock() }; return generation == thumbnailGeneration && source == previewSourceGeneration }
         guard isCurrent(), let atlas = makeThumbnailAtlas(buffer, recipe:recipe, edge:edge), isCurrent() else { return (nil, [:]) }
         if forWeb { return (UIImage(cgImage:atlas).jpegData(compressionQuality:0.88)?.base64EncodedString(), [:]) }
         var tiles = [Look:UIImage]()
@@ -424,6 +434,8 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
     }
     private var latest: CVPixelBuffer?
     private var lastDisplayBuffer: CVPixelBuffer?, waitingForPreview: UUID?
+    private var lastDisplayTime = -Double.infinity, lastDisplayPTS = CMTime.invalid
+    private var previewSourceGeneration: UInt64 = 0
     private var expectedPreviewPosition: AVCaptureDevice.Position?
     private var earliestPreviewTime = CMTime.invalid
     @Published private(set) var transitionImage: UIImage?
@@ -446,7 +458,6 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
             self.restorePending()
             self.active = true
             self.hiddenStopGeneration &+= 1
-            self.lock.lock(); self.acceptingPreviewFrames = true; self.lock.unlock()
             self.authorize()
         }
     }
@@ -464,6 +475,7 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
                 session.startRunning()
             }
             let running = session.isRunning && !session.isInterrupted
+            if running { resumePreviewFrames(device,cover:nil) }
             refreshMacroState(device)
             DispatchQueue.main.async { self.ready = running }
         case .notDetermined:
@@ -610,14 +622,13 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
             self.visibleTransition = nil; self.transitionImage = nil
         }
     }
-    private func pausePreviewForFlip() -> UUID? {
-        let cover = beginPreviewTransition()
+    private func suspendPreviewFrames() {
         lock.lock()
         acceptingPreviewFrames = false; latest = nil; lastDisplayBuffer = nil; waitingForPreview = nil
+        previewSourceGeneration &+= 1
         lock.unlock()
-        return cover
     }
-    private func resumePreviewAfterFlip(_ device: AVCaptureDevice, cover: UUID?) {
+    private func resumePreviewFrames(_ device: AVCaptureDevice, cover: UUID?) {
         let time = session.masterClock.map { CMClockGetTime($0) } ?? .invalid
         lock.lock()
         earliestPreviewTime = time; expectedPreviewPosition = device.position
@@ -635,16 +646,14 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
                 DispatchQueue.main.async { completion(false) }; return
             }
             let transition = self.beginPreviewTransition()
+            self.suspendPreviewFrames()
             let previousZoom = self.requestedDisplayZoom
             let switched = self.replaceBackInput(with:next,high:enabled)
             let ready = switched && !self.captureSizes(next.device).isEmpty
             if switched && !ready {
                 _ = self.replaceBackInput(with:current,high:!enabled,zoom:previousZoom)
             }
-            if let transition {
-                self.lock.lock(); self.waitingForPreview = transition; self.lock.unlock()
-                self.clearPreviewTransition(transition,after:1.5)
-            }
+            self.resumePreviewFrames(self.input?.device ?? current.device,cover:transition)
             DispatchQueue.main.async { completion(ready) }
         }
     }
@@ -843,13 +852,14 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
             self.report("无法切换摄像头。"); return
         }
         let previousZoom = self.requestedDisplayZoom
-        let cover = self.pausePreviewForFlip()
+        let cover = self.beginPreviewTransition()
+        self.suspendPreviewFrames()
         self.session.beginConfiguration()
         self.session.removeInput(old)
         guard self.session.canAddInput(next) else {
             self.session.addInput(old); self.orient(); self.session.commitConfiguration()
             self.updatePhotoCapabilities(restoringZoom:previousZoom)
-            self.resumePreviewAfterFlip(old.device,cover:cover)
+            self.resumePreviewFrames(old.device,cover:cover)
             self.report("当前无法切换摄像头，已恢复原镜头。"); return
         }
         if toFront { self.parkedRear = (old,previousZoom,self.usingDedicatedWide) }
@@ -858,7 +868,7 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
         self.session.addInput(next); self.input = next
         self.preparePhotoFormat(next.device); self.orient(); self.session.commitConfiguration()
         self.updatePhotoCapabilities(restoringZoom:restore?.zoom ?? 1)
-        self.resumePreviewAfterFlip(next.device,cover:cover)
+        self.resumePreviewFrames(next.device,cover:cover)
         self.currentInputRevision += 1
         let revision = self.currentInputRevision
         DispatchQueue.main.async { self.inputRevision = revision }
@@ -873,23 +883,29 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
             guard matchesInput, !earliestPreviewTime.isNumeric || !pts.isNumeric || CMTimeCompare(pts,earliestPreviewTime) >= 0 else { lock.unlock(); return }
             expectedPreviewPosition = nil; earliestPreviewTime = .invalid
         }
-        latest = buffer; lastDisplayBuffer = buffer
-        if let id=waitingForPreview { waitingForPreview=nil; clearPreviewTransition(id,after:0.12) }
-        guard !thumbnailRendering, nativeThumbnails || atlasRequest != nil else { lock.unlock(); return }
         let now = CACurrentMediaTime(), pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-        guard now >= nextThumbnailTime, !pts.isNumeric || !lastThumbnailPTS.isNumeric || CMTimeCompare(pts, lastThumbnailPTS) != 0 else { lock.unlock(); return }
-        let recipe = selected, generation = thumbnailGeneration, deliver = atlasRequest
+        latest = buffer; lastDisplayBuffer = buffer; lastDisplayTime = now; lastDisplayPTS = pts
+        if let id=waitingForPreview { waitingForPreview=nil; clearPreviewTransition(id,after:0.12) }
+        scheduleThumbnailsLocked(buffer, pts:pts, now:now)
+        lock.unlock()
+    }
+    // The opening request and capture delegate reserve the same single worker under lock.
+    private func scheduleThumbnailsLocked(_ buffer: CVPixelBuffer, pts: CMTime, now: Double) {
+        guard !thumbnailRendering, nativeThumbnails || atlasRequest != nil, now >= nextThumbnailTime,
+              !pts.isNumeric || !lastThumbnailPTS.isNumeric || CMTimeCompare(pts,lastThumbnailPTS) != 0 else { return }
+        let recipe = selected, generation = thumbnailGeneration, source = previewSourceGeneration, deliver = atlasRequest
         let edge: CGFloat = deliver == nil ? 224 : requestedThumbnailEdge
         let thermal = ProcessInfo.processInfo.thermalState
         let fps: Double = thermal == .serious || thermal == .critical ? 12 : 30
         atlasRequest = nil; thumbnailRendering = true; lastThumbnailPTS = pts; nextThumbnailTime = now + 1.0/fps - 0.002
-        lock.unlock()
         thumbnailQueue.async { autoreleasepool {
-            let batch = self.renderThumbnailBatch(buffer, recipe:recipe, generation:generation, edge:edge, forWeb:deliver != nil)
+            let batch = self.renderThumbnailBatch(buffer, recipe:recipe, generation:generation, source:source, edge:edge, forWeb:deliver != nil)
             DispatchQueue.main.async {
                 self.lock.lock(); self.thumbnailRendering = false
-                let current = generation == self.thumbnailGeneration; self.lock.unlock()
+                let current = generation == self.thumbnailGeneration, sameSource = source == self.previewSourceGeneration
+                self.lock.unlock()
                 guard current else { return }
+                guard sameSource else { deliver?(nil); return }
                 if let deliver { deliver(batch.jpeg) } else if !batch.tiles.isEmpty { self.thumbnails = batch.tiles }
             }
         } }

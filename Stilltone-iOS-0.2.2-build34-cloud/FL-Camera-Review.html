@@ -148,6 +148,7 @@ liveShortcut.disabled=motionButton.disabled;liveShortcut.setAttribute('aria-pres
 const captureStill=takeShot;takeShot=()=>{captureStill();if(!motionEnabled||!stream||recording)return;let media;try{media=get('screen').captureStream(24);const recorder=new MediaRecorder(media),chunks=[];recording=recorder;recorder.ondataavailable=event=>{if(event.data.size)chunks.push(event.data)};recorder.onstop=()=>{media.getTracks().forEach(track=>track.stop());recording=null;if(chunks.length){const mime=recorder.mimeType;download(new Blob(chunks,{type:mime}),'FL-motion-'+Date.now()+(mime.includes('mp4')?'.mp4':'.webm'))}};recorder.start();setTimeout(()=>{if(recorder.state==='recording')recorder.stop()},2500)}catch{media?.getTracks().forEach(track=>track.stop());recording=null;notice('当前浏览器无法录制动态片段')}};
 let activeSelector='',touchStart=null;
 let controlRotation=0,displayRotation=0,alignFilterRail=null;
+let updateNativeRail=()=>{};
 function pickerAxis(event){
     if(controlRotation===90)return event.clientY;
     if(controlRotation===-90)return -event.clientY;
@@ -235,6 +236,7 @@ if(cameraBridge)syncFormatLabel();else reviewZoom(1);
 function drawBottom(){
     alignFilterRail=null;drawPickerContent();
     if(controlRotation!==0){orientPicker();if(alignFilterRail)alignFilterRail()}
+    updateNativeRail()
 }
 function drawPickerContent(){
     selector.classList.toggle('format-picker',activeSelector==='格式');selector.dataset.picker=activeSelector;
@@ -270,7 +272,7 @@ function drawPickerContent(){
     if(activeSelector==='曝光'){const ev=get('ev'),slider=ev.cloneNode(false);slider.removeAttribute('id');const label=usesDeviceBias()?'曝光补偿':'成片亮度';selector.querySelector('small').textContent=label;slider.setAttribute('aria-label',label);slider.value=ev.value;title.textContent=ev.value+' EV';slider.oninput=()=>{resetSun();ev.value=slider.value;title.textContent=ev.value+' EV';refresh()};selector.append(slider);return}
     title.textContent=aspect;choices(['4:3','16:9','1:1'],aspect,value=>{aspect=value;syncFrame();refresh()});
 }
-function leavePicker(){shootRow.inert=false;footer.classList.remove('settling-home');drawer.style.transform='';selector.style.transform='';selector.hidden=true;footer.classList.remove('selecting');drawer.hidden=true;controlsButton.setAttribute('aria-expanded','false');activeSelector=''}
+function leavePicker(){shootRow.inert=false;footer.classList.remove('settling-home');drawer.style.transform='';selector.style.transform='';selector.hidden=true;footer.classList.remove('selecting');drawer.hidden=true;controlsButton.setAttribute('aria-expanded','false');activeSelector='';updateNativeRail()}
 let blankTouch=null;
 function isMenuBlank(target){
     return cameraBridge&&!folding&&!gallery.open&&!formatSheet.open&&(!drawer.hidden||!selector.hidden)
@@ -375,6 +377,21 @@ sun.onpointerup=sun.onpointercancel=sun.onlostpointercapture=event=>{
     if(!dragSun||dragSun.id!==event.pointerId)return;
     dragSun=null;fadeFocus();sunReset=setTimeout(()=>{resetSun();refresh()},4000)
 };
+let cachedRailAtlas=null;
+function paintRailAtlas(track,image,looks){
+    const side=image.naturalHeight,canvases=[...track.querySelectorAll('canvas[data-look]')];
+    if(!Array.isArray(looks)||!canvases.length||looks.length!==canvases.length||side<=0||image.naturalWidth!==side*looks.length)return false;
+    const columns=canvases.map(canvas=>looks.indexOf(canvas.dataset.look));
+    if(columns.includes(-1)||new Set(columns).size!==columns.length)return false;
+    const contexts=canvases.map(canvas=>canvas.getContext('2d'));
+    if(contexts.some(context=>!context||context.isContextLost?.()))return false;
+    for(const [i,canvas] of canvases.entries()){
+        if(canvas.width!==side||canvas.height!==side){canvas.width=side;canvas.height=side}
+        contexts[i].drawImage(image,columns[i]*side,0,side,side,0,0,side,side)
+    }
+    track.setAttribute('aria-busy','false');
+    return true
+}
 function filterRail(){
     selector.innerHTML='<button class="return" aria-label="返回拍摄控制">‹</button><small>滤镜</small><strong></strong><div class="rail-window"><section class="rail-track"></section></div>';
     selector.querySelector('.return').onclick=returnToDrawer;
@@ -384,7 +401,23 @@ function filterRail(){
     function place(position,animate){track.style.transition=animate&&!matchMedia('(prefers-reduced-motion: reduce)').matches?'transform '+Math.min(300,110+1.1*Math.abs(new DOMMatrixReadOnly(getComputedStyle(track).transform).m41-(center()-position)*step()))+'ms cubic-bezier(.2,.78,.24,1)':'none';track.style.transform='translate3d('+((center()-position)*step())+'px,0,0)'}
     let strengthSlider;
     function select(index,animate,move=true){selected=Math.min(options.length-1,Math.max(0,index));if(get('look').value!==options[selected].value){get('look').value=options[selected].value;mark();refresh()}if(strengthSlider)strengthSlider.disabled=options[selected].value==='original';selector.querySelector('strong').textContent=options[selected].text;[...track.children].forEach((button,position)=>button.setAttribute('aria-pressed',String(position===selected)));if(move)place(selected,animate)}
-    options.forEach((option,index)=>{const button=document.createElement('button'),thumb=surface(96,96);thumb.dataset.look=option.value;button.append(thumb,option.text);button.onclick=()=>{if(index!==selected)select(index,true);else foldControls(selector)};track.append(button)});
+    if(cameraBridge)track.setAttribute('aria-busy','true');
+    options.forEach((option,index)=>{
+        const button=document.createElement('button'),thumb=surface(96,96);
+        thumb.dataset.look=option.value;
+        if(cameraBridge){
+            const frame=document.createElement('span');frame.className='rail-image';
+            frame.setAttribute('aria-hidden','true');frame.append(thumb);button.append(frame)
+        }else button.append(thumb);
+        button.append(option.text);
+        button.onclick=()=>{if(index!==selected)select(index,true);else foldControls(selector)};
+        track.append(button)
+    });
+    // A quick reopen can paint the last complete frame before this panel reaches the screen.
+    if(cameraBridge&&cachedRailAtlas){
+        if(performance.now()-cachedRailAtlas.time<=2500)paintRailAtlas(track,cachedRailAtlas.image,cachedRailAtlas.looks);
+        else cachedRailAtlas=null
+    }
     viewport.onpointerdown=event=>{if(event.button!==0||event.isPrimary===false)return;const offset=new DOMMatrixReadOnly(getComputedStyle(track).transform).m41;gesture={id:event.pointerId,x:pickerAxis(event),lastX:pickerAxis(event),time:event.timeStamp,speed:0,start:center()-offset/step(),drag:false};track.style.transition='none';track.style.transform='translateX('+offset+'px)'};
     viewport.onpointermove=event=>{if(!gesture||gesture.id!==event.pointerId)return;const dt=event.timeStamp-gesture.time;
         if(dt>0)gesture.speed=dt>90?0:.3*gesture.speed+.7*(pickerAxis(event)-gesture.lastX)/dt;
@@ -459,6 +492,7 @@ function foldControls(panel=drawer){
     if(!panel.animate||matchMedia('(prefers-reduced-motion: reduce)').matches){dismiss();return}
     footer.classList.add('settling-home');
     closingPanel=panel;panel.inert=true;panel.classList.add('retracting');
+    if(panel===selector)updateNativeRail();
     const base=panel.getBoundingClientRect(),target=modeButtons[selectedMode];
     const strip=modeStrip.getBoundingClientRect(),pill=getComputedStyle(modeStrip,'::before');
     const end={width:parseFloat(pill.width),height:parseFloat(pill.height)};
@@ -779,6 +813,10 @@ body.native-camera .phone{width:100%;height:100dvh;min-width:0;max-width:none;ma
 .native-camera .picker-surface>div:not(.rail-window)>button{min-height:44px;flex:1;display:grid;place-items:center;padding:2px;font-size:14px}
 .native-camera .picker-surface>.rail-window{display:block;width:100%;overflow:hidden;padding:0;touch-action:none}
 .native-camera .picker-surface .rail-track button{display:flex;flex-direction:column;align-items:center;gap:4px;overflow-wrap:anywhere}
+.native-camera .rail-image{display:block;width:100%;aspect-ratio:1;overflow:hidden;border-radius:8px;background:#48484a}
+.native-camera .rail-image canvas{width:100%;height:100%;border-radius:inherit}
+.native-camera .rail-track[aria-busy=true] .rail-image canvas{visibility:hidden;opacity:0}
+@media(prefers-reduced-motion:no-preference){.native-camera .rail-track[data-fade-in] .rail-image canvas{transition:opacity 140ms ease-out}}
 .native-camera .picker-surface>label{display:flex;align-items:center;justify-content:center;gap:4px;font-size:12px}
 .native-camera .picker-surface input[type=range]{min-width:0;max-width:70%;align-self:center}
 .native-camera .picker-surface .format-row{min-height:44px;flex-shrink:0}
@@ -829,6 +867,7 @@ window.nativeCameraState=waiting;
 sheet.textContent+=`html,body,.phone,.phone>.stage{background:transparent!important}.phone #screen,.phone #live{visibility:hidden!important}`;
 hasPicture=true;get('live').hidden=true;
 const recipe=()=>({look:get('look').value,ev:usesDeviceBias()?0:exposureValue(),aspect,strength:Number(get('strength').value)/100});let lastRecipe='',lastFrame='',lastRail=false,railVersion=0,railEdge=0;
+let railSource=null,railPageActive=true;
 let previousAspect='4:3',previousRaw=false,lastNight='',lastSavedID=null;
 // Measure the destination independently of the animated guide. The native layer
 // receives one rectangle per selection, including when a transition is interrupted.
@@ -886,11 +925,30 @@ function reconcile(value=recipe()){
     for(const el of [topFlash,flashTile]){el.disabled=!usable||!state.flash;el.setAttribute('aria-pressed',String(shotFlash))}
     nightTile.disabled=!usable;nightTile.setAttribute('aria-pressed',String(nightMode==='开启'));
 }
-function sync(){applyRawControls();const value=recipe(),key=JSON.stringify(value);reconcile(value);if(usesDeviceBias()&&hardwareReady()){const bias=exposureValue();if(lastBias!==bias){lastBias=bias;send('bias',{value:bias})}}if(lastNight!==nightMode){lastNight=nightMode;send('night',{mode:nightMode})}if(key!==lastRecipe){lastRecipe=key;send('recipe',value)}sendPreviewFrame();const open=!selector.hidden&&activeSelector==='滤镜';const tile=open?selector.querySelector('canvas[data-look]'):null;
-    const edge=tile?Math.min(384,Math.max(96,Math.ceil(tile.getBoundingClientRect().width*(window.devicePixelRatio||1)))):0;
-    if(open!==lastRail||edge!==railEdge){lastRail=open;railEdge=edge;send('rail',{open,edge,version:++railVersion})}return value}
+updateNativeRail=()=>{
+    const state=window.nativeCameraState;
+    const source=railPageActive&&!document.hidden&&state.ready&&!state.zoomSettling
+        ?JSON.stringify([state.inputRevision,state.zoom,state.mode48]):null;
+    const changed=source!==railSource;
+    if(changed){
+        railSource=source;cachedRailAtlas=null;
+        selector.querySelector('.rail-track')?.setAttribute('aria-busy','true')
+    }
+    const open=source!==null&&!selector.hidden&&activeSelector==='滤镜'&&!selector.classList.contains('retracting');
+    const tile=open?selector.querySelector('canvas[data-look]'):null;
+    // Measure layout size, independent of an in-flight panel scale or rotation.
+    const width=tile?(parseFloat(getComputedStyle(tile).width)||tile.getBoundingClientRect().width):0;
+    const edge=tile?Math.min(384,Math.max(96,Math.ceil(width*(window.devicePixelRatio||1)))):0;
+    if(open!==lastRail||edge!==railEdge||(open&&changed)){
+        lastRail=open;railEdge=edge;send('rail',{open,edge,version:++railVersion})
+    }
+};
+document.addEventListener('visibilitychange',updateNativeRail);
+window.addEventListener('pagehide',()=>{railPageActive=false;updateNativeRail()});
+window.addEventListener('pageshow',()=>{railPageActive=true;updateNativeRail()});
+function sync(){applyRawControls();const value=recipe(),key=JSON.stringify(value);reconcile(value);if(usesDeviceBias()&&hardwareReady()){const bias=exposureValue();if(lastBias!==bias){lastBias=bias;send('bias',{value:bias})}}if(lastNight!==nightMode){lastNight=nightMode;send('night',{mode:nightMode})}if(key!==lastRecipe){lastRecipe=key;send('recipe',value)}sendPreviewFrame();updateNativeRail();return value}
 refresh=sync;new ResizeObserver(sync).observe(targetFrame);new MutationObserver(sync).observe(selector,{attributes:true,attributeFilter:['hidden'],childList:true});window.addEventListener('resize',()=>{readScreenPose();sync()});
-get('flip').onclick=()=>{if(hardwareReady()){clearZoomInput();send('flip',{inputRevision:window.nativeCameraState.inputRevision})}};get('album').onclick=()=>{cancelTimer();send('album')};
+get('flip').onclick=()=>{if(hardwareReady()){clearZoomInput();send('flip',{inputRevision:window.nativeCameraState.inputRevision})}};get('album').onclick=()=>{cancelTimer();railPageActive=false;updateNativeRail();send('album')};
 window.hardwareShutter=()=>{
     if(!canUseCamera()||document.hidden||selectedMode!==1)return;
     get('shutter').click()
@@ -1060,6 +1118,7 @@ window.receiveCamera=state=>{
         formats:list(state?.formats,f=>['HEIF','JPEG','RAW'].includes(f)),sizes:list(state?.sizes,mp=>Number.isInteger(mp)&&mp>0),
         lenses:list(state?.lenses,z=>Number.isFinite(z)&&z>0),zoom:Number.isFinite(state?.zoom)&&state.zoom>0?state.zoom:null};
     window.nativeCameraState=state;
+    if(!prev.ready&&state.ready&&!document.hidden)railPageActive=true;
     const range=state.zoomRange;
     state.zoomRange=Array.isArray(range)&&range.length===2&&range.every(v=>Number.isFinite(v)&&v>0)&&range[0]<=range[1]?range:null;
     setControlRotation(state.controlRotation);
@@ -1104,7 +1163,21 @@ window.receiveCamera=state=>{
     if(!selector.hidden&&activeSelector==='夜间模式'&&(usable!==canUseCamera(prev)||oldNight!==nightMode||oldCodec!==previewCodec))drawBottom()
 };
 window.receiveCamera(waiting);
-window.receiveThumbs=async(atlas,looks,version=railVersion)=>{if(!lastRail||version!==railVersion)return;const image=new Image();image.src='data:image/jpeg;base64,'+atlas;let timeout;try{const decoded=await Promise.race([image.decode().then(()=>true),new Promise(resolve=>{timeout=setTimeout(()=>resolve(false),600)})]);if(!decoded)return}catch{return}finally{clearTimeout(timeout)}if(!lastRail||version!==railVersion)return;const side=image.naturalHeight;for(const canvas of selector.querySelectorAll('canvas[data-look]')){const index=looks.indexOf(canvas.dataset.look);if(index<0)continue;if(canvas.width!==side){canvas.width=side;canvas.height=side}canvas.getContext('2d').drawImage(image,index*side,0,side,side,0,0,side,side)}};
+window.receiveThumbs=async(atlas,looks,version=railVersion)=>{
+    if(!lastRail||version!==railVersion)return;
+    const image=new Image();
+    image.src='data:image/jpeg;base64,'+atlas;
+    let timeout;
+    try{
+        const decoded=await Promise.race([image.decode().then(()=>true),new Promise(resolve=>{timeout=setTimeout(()=>resolve(false),600)})]);
+        if(!decoded)return
+    }catch{return}finally{clearTimeout(timeout)}
+    if(!lastRail||version!==railVersion)return;
+    const track=selector.querySelector('.rail-track');
+    if(!track)return;
+    track.setAttribute('data-fade-in','');
+    if(paintRailAtlas(track,image,looks))cachedRailAtlas={image,looks,time:performance.now()}
+};
 sync();send('ready');
 })();
 </script></html>

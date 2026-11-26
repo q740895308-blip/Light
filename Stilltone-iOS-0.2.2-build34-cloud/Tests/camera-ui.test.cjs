@@ -215,7 +215,9 @@ test('landscape startup/rotation proceeds through the actual script in both mobi
 test('receiveThumbs still accepts exactly atlas, looks and crops by the reported order',async()=>{
     const t=ready();eq(t.host.receiveThumbs.length,2);t.open('滤镜');t.run('refresh()');eq(last(t,'rail'),{type:'rail',open:true,edge:100,version:1});
     const thumb=t.run('selector').querySelector('canvas[data-look="FL2"]'),ctx=thumb.getContext();const draws=[];ctx.drawImage=(...args)=>draws.push(args);
-    t.host.Image=class {constructor(){this.naturalHeight=8}async decode(){}};await t.host.receiveThumbs('sample',['original','FL3','FL2']);eq(draws.length,1);eq(draws[0][0].src,'data:image/jpeg;base64,sample');eq(draws[0].slice(1),[16,0,8,8,0,0,8,8]);
+    const looks=['original','FL3','FL2','GR-Positive','Classic-Negative','Nostalgic-Negative','Classic-Chrome'];
+    t.host.Image=class {naturalHeight=8;naturalWidth=8*looks.length;async decode(){}};
+    await t.host.receiveThumbs('sample',looks);eq(draws.length,1);eq(draws[0][0].src,'data:image/jpeg;base64,sample');eq(draws[0].slice(1),[16,0,8,8,0,0,8,8]);
     t.close();t.run('refresh()');await t.host.receiveThumbs('sample',['FL2']);eq(draws.length,1);
 });
 (async()=>{let failures=0;console.log(file);for(const [name,check] of cases){try{await check();console.log('PASS '+name)}catch(error){failures++;console.log('FAIL '+name+'\n  '+error.message);if(process.env.CAMERA_UI_STACK)console.log(error.stack)}}console.log(`${cases.length-failures}/${cases.length} passed; ${failures} failed`);if(failures)process.exitCode=1})();

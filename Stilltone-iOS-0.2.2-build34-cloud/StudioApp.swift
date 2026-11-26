@@ -510,25 +510,25 @@ private struct SharedControls: UIViewRepresentable {
             }
             syncThumbnailRail()
         }
-        private func syncThumbnailRail() {
+        private func syncThumbnailRail(versionChanged: Bool = false) {
             let active = owner.shootViewActive && ready && rail && owner.camera.ready && web != nil
-            guard active != thumbnailsActive else { return }
+            guard active != thumbnailsActive || (active && versionChanged) else { return }
             thumbnailsActive = active; railEpoch &+= 1
             owner.camera.cancelThumbnailAtlas()
             guard active else { return }
-            guard let retired = webDelivery else { requestThumbnail(); return }
+            guard let retired = webDelivery else { requestThumbnail(useLatest:true); return }
             // Normally drain the old call (the page caps decode at 600 ms). Only a reopened
             // rail may retire a lost callback; a slow current rail never gets another credit.
             let reopened = railEpoch
             DispatchQueue.main.asyncAfter(deadline:.now() + 1) { [weak self] in
                 guard let self, self.railEpoch == reopened, self.webDelivery == retired else { return }
-                self.webDelivery = nil; self.requestThumbnail()
+                self.webDelivery = nil; self.requestThumbnail(useLatest:true)
             }
         }
-        private func requestThumbnail() {
+        private func requestThumbnail(useLatest: Bool = false) {
             let epoch = railEpoch
             let pageVersion = pageRailVersion
-            owner.camera.requestThumbnailAtlas(edge: railEdge) { [weak self] atlas in
+            owner.camera.requestThumbnailAtlas(edge:railEdge, useLatest:useLatest) { [weak self] atlas in
                 guard let self, self.thumbnailsActive, self.railEpoch == epoch, let web = self.web else { return }
                 guard let atlas else { self.requestThumbnail(); return } // retry only on another sample
                 self.webDelivery = epoch
@@ -543,7 +543,7 @@ private struct SharedControls: UIViewRepresentable {
                             guard let self, self.thumbnailsActive, self.railEpoch == epoch, self.webDelivery == nil else { return }
                             self.requestThumbnail()
                         }
-                    } else { self.requestThumbnail() }
+                    } else { self.requestThumbnail(useLatest:self.railEpoch != epoch) }
                 }
             }
         }
@@ -574,8 +574,9 @@ private struct SharedControls: UIViewRepresentable {
             case "rail":
                 rail = payload["open"] as? Bool == true
                 railEdge = payload["edge"] as? Int ?? 224
+                let previousVersion = pageRailVersion
                 pageRailVersion = payload["version"] as? Int ?? 0
-                syncThumbnailRail()
+                syncThumbnailRail(versionChanged:pageRailVersion != previousVersion)
             case "prepare48":
                 c.setHighResolution(payload["enabled"] as? Bool == true) { [weak self] ok in
                     guard let self else { return }

@@ -3,6 +3,7 @@ const path=require('node:path');
 const {pathToFileURL}=require('node:url');
 const {chromium,webkit}=require('playwright-core');
 const {verifyMenuDismissal}=require('./menu-dismissal.cjs');
+const {verifyFilterFirstFrame}=require('./filter-first-frame.cjs');
 (async()=>{
     const engine=process.env.CHROME_EXE?chromium:webkit;
     const browser=await engine.launch({headless:true,...(process.env.CHROME_EXE?{executablePath:process.env.CHROME_EXE}:{})});
@@ -12,6 +13,7 @@ const {verifyMenuDismissal}=require('./menu-dismissal.cjs');
             const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
             await page.addInitScript(()=>{window.posts=[];Object.defineProperty(window,'webkit',{configurable:true,value:{messageHandlers:{camera:{postMessage:m=>window.posts.push(m)}}}})});
             await page.goto(pathToFileURL(path.join(__dirname,'..','FL-Camera-Review.html')).href);
+            if(width===393){await verifyFilterFirstFrame(page);await page.reload()}
             await page.evaluate(()=>window.receiveCamera({ready:true,busy:false,formats:['HEIF','RAW'],sizes:[12,48],lenses:[.5,1,2,3],zoom:1,flash:true,live:true,biasLimits:[-3,3]}));
             await verifyMenuDismissal(page);
             if(width===402||width===440){assert.deepEqual(errors,[]);await context.close();continue}

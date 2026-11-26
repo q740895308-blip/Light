@@ -59,7 +59,7 @@ final class Camera {
     var latest: Int?, lastDisplayBuffer: Int?, waitingForPreview: Int?, transitionImage: Int?, visibleTransition: Int?, atlasRequest: Int?, shotID: Int?
     var starts = 0
     func restorePending() {}
-    func authorize() { starts += 1; ready = true; session.isRunning = true }
+    func authorize() { starts += 1; ready = true; acceptingPreviewFrames = true; session.isRunning = true }
     func updatePhysicalPose(_ pose: UIDeviceOrientation) { poses.append(pose) }
     ${method(camera, 'func start()')}
     ${method(camera, 'func stop()')}
@@ -177,8 +177,9 @@ final class Flip {
     func profile(_ device:AVCaptureDevice) -> (stops:[Double], optical:[Double], range:[Double]) { zoomCapabilities(device) }
     func report(_ error:String) {}
     func orient() {}
-    func pausePreviewForFlip()->UUID? { nil }
-    func resumePreviewAfterFlip(_ device:AVCaptureDevice,cover:UUID?) {}
+    func beginPreviewTransition()->UUID? { nil }
+    func suspendPreviewFrames() {}
+    func resumePreviewFrames(_ device:AVCaptureDevice,cover:UUID?) {}
     func updatePhotoCapabilities(restoringZoom:Double? = nil) {
         input!.device.videoZoomFactor = 1
         if let zoom=restoringZoom { resetZoom(input!.device,displayZoom:zoom) }
