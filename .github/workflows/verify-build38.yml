@@ -1,0 +1,76 @@
+name: Verify Stilltone build 38
+on:
+  push:
+    branches: [verify/stilltone-build38]
+  workflow_dispatch:
+defaults:
+  run:
+    working-directory: Stilltone-iOS-0.2.2-build38-cloud
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15-intel
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify shared pages, controls and native resources
+        run: |
+          python3 Tests/verify_bundle.py
+          node Tests/camera-ui.test.cjs
+          node Tests/build17.test.cjs
+          node Tests/build18.test.cjs
+          node Tests/thumbnail-receiver.cjs
+          node Tests/thumbnail-scheduler.cjs
+          node Tests/native-lut-sizes.cjs
+          node Tests/capture-lifecycle.cjs
+          node Tests/photo-dimensions.cjs
+      - name: Verify touch layout in WebKit
+        run: |
+          npm install --prefix "$RUNNER_TEMP/ui-check" --no-audit --no-fund playwright-core@1.56.1
+          "$RUNNER_TEMP/ui-check/node_modules/.bin/playwright-core" install webkit
+          NODE_PATH="$RUNNER_TEMP/ui-check/node_modules" node Tests/camera-layout.cjs
+          NODE_PATH="$RUNNER_TEMP/ui-check/node_modules" node Tests/device-layout.cjs
+      - name: Compile for iPhone and package unsigned IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -project FL-Camera.xcodeproj -target FLCamera -configuration Release -sdk iphoneos ARCHS=arm64 ONLY_ACTIVE_ARCH=NO CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$RUNNER_TEMP/device" build
+          app="$RUNNER_TEMP/device/FLCamera.app"
+          executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Info.plist")
+          xcrun lipo "$app/$executable" -verify_arch arm64
+          # Older runtimes expose WebKit's Objective-C API without the Swift overlay.
+          xcrun otool -l "$app/$executable" | awk '$1=="cmd" {op=$2} $1=="name" && /libswiftWebKit\.dylib/ && op=="LC_LOAD_DYLIB" {print "Required WebKit overlay"; bad=1} END {exit bad}'
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Info.plist")" = 0.2.2
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Info.plist")" = 38
+          cmp Stilltone-Album.html "$app/Stilltone-Album.html"
+          cmp FL-Camera-Review.html "$app/FL-Camera-Review.html"
+          for lut in *.rgba; do cmp "$lut" "$app/$lut"; done
+          mkdir -p "$RUNNER_TEMP/package/Payload"
+          ditto "$app" "$RUNNER_TEMP/package/Payload/FLCamera.app"
+          cd "$RUNNER_TEMP/package"
+          /usr/bin/zip -qry "$GITHUB_WORKSPACE/FLCamera-unsigned.ipa" Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Stilltone-0.2.2-build38-unsigned
+          path: FLCamera-unsigned.ipa
+          if-no-files-found: error
+  simulator:
+    name: iPhone 14 Pro
+    runs-on: macos-15-intel
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and launch on the selected iPhone simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -project FL-Camera.xcodeproj -target FLCamera -configuration Release -sdk iphonesimulator ARCHS="$(uname -m)" CODE_SIGN_IDENTITY=- CONFIGURATION_BUILD_DIR="$RUNNER_TEMP/simulator" build
+          bash Tests/simulator-launch.sh "$RUNNER_TEMP/simulator/FLCamera.app" iPhone-14-Pro
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Stilltone-build38-iPhone14Pro-UI
+          path: ${{ runner.temp }}/stilltone-menu-ui.xcresult
+          if-no-files-found: ignore
+          retention-days: 7
