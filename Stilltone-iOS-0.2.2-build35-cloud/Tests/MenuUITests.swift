@@ -42,15 +42,19 @@ final class MenuUITests: XCTestCase {
         XCTAssertTrue(toggle.isHittable, "The control button must respond again after the sheet closes")
         toggle.tap()
 
-        for label in ["宽高比", "滤镜", "曝光", "计时器", "格式", "夜间模式", "闪光灯"] {
+        // WKWebView exposes some tiles as toggles and some as buttons. Hit the
+        // four enabled grid cells on the 14 Pro simulator through the real screen.
+        // Format, night mode and flash require camera capabilities it lacks.
+        let tiles: [(label: String, offset: CGVector)] = [
+            ("宽高比", CGVector(dx: 113, dy: 63)),
+            ("计时器", CGVector(dx: -113, dy: 192)),
+            ("曝光", CGVector(dx: 0, dy: 192)),
+            ("滤镜", CGVector(dx: -113, dy: 321))
+        ]
+        for (label, offset) in tiles {
             XCTAssertTrue(grip.waitForExistence(timeout: 5))
-            let matching = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", label))
-            let tile = try XCTUnwrap(matching.allElementsBoundByIndex.first { $0.frame.midY > grip.frame.midY }, label)
-            if !tile.isEnabled && ["格式", "夜间模式", "闪光灯"].contains(label) {
-                continue // The simulator has no camera hardware to advertise these options.
-            }
-            XCTAssertTrue(tile.isEnabled, label)
-            tile.tap()
+            let center = grip.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            center.withOffset(offset).tap()
             let back = app.buttons["返回拍摄控制"].firstMatch
             XCTAssertTrue(back.waitForExistence(timeout: 5), label)
             attach(label)
