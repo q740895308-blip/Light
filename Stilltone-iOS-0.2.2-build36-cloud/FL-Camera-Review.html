@@ -183,7 +183,9 @@ function setControlRotation(value){
 function toggleShortcut(kind){if(folding&&sheetMotion){
         if(!selector.hidden&&activeSelector===kind){
             const from=selector.getBoundingClientRect(),opacity=Number(getComputedStyle(selector).opacity);
-            stopSheetMotion();selector.style.transform='';animatePanelChange(selector,from,opacity);return
+            stopSheetMotion();selector.style.transform='';
+            animatePanelChange(selector,from,opacity);
+            updateNativeRail();return
         }
         chooseBottom(kind,true);return
     }else if(folding)return;
