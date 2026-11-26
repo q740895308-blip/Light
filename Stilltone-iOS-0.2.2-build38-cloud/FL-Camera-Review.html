@@ -569,7 +569,24 @@ const gripDismissDistance=28;
 let gripPull=null,gripRebound=null,blockedGripClick=null;
 let folding=false,sheetMotion=null;
 let closingPanel=null;
+// Keep the mode's actual glyph above the travelling shell. A transparent
+// placeholder preserves the button's layout, accessible name and touch target.
+let restoreDockLabel=null;
+function liftDockLabel(button){
+    const label=button.firstElementChild;
+    const box=label.getBoundingClientRect(),base=footer.getBoundingClientRect();
+    if(!box.width||!box.height)return;
+    const style=getComputedStyle(label),holder=document.createElement('span');
+    holder.className='dock-label-layer';holder.setAttribute('aria-hidden','true');
+    Object.assign(holder.style,{left:box.left+box.width/2-base.left+'px',top:box.top+box.height/2-base.top+'px',
+        fontFamily:style.fontFamily,fontSize:style.fontSize,fontWeight:style.fontWeight,lineHeight:style.lineHeight,
+        letterSpacing:style.letterSpacing,color:style.color});
+    const placeholder=label.cloneNode(true);placeholder.style.opacity='0';
+    label.replaceWith(placeholder);holder.append(label);footer.append(holder);
+    restoreDockLabel=()=>{placeholder.replaceWith(label);holder.remove();restoreDockLabel=null}
+}
 function releaseClosingPanel(){
+    restoreDockLabel?.();
     if(!closingPanel)return;
     closingPanel.classList.remove('retracting');closingPanel.inert=false;closingPanel=null
 }
@@ -616,6 +633,7 @@ function foldControls(panel=drawer){
     end.left=strip.left+modeStrip.clientLeft+parseFloat(pill.left)+selectedMode*end.width;
     end.top=strip.top+modeStrip.clientTop+parseFloat(pill.top);
     if(!base.width||!base.height||!end.width||!end.height){dismiss();return}
+    if(cameraBridge)liftDockLabel(target);
     const transform=box=>'translate('+(box.left-base.left)+'px,'+(box.top-base.top)+'px) scale('+box.width/base.width+','+box.height/base.height+')';
     const radius=Math.min(end.width,end.height)/2;
     const endRadius=(radius*base.width/end.width)+'px / '+(radius*base.height/end.height)+'px';
@@ -934,6 +952,7 @@ body.native-camera .phone{width:100%;height:100dvh;min-width:0;max-width:none;ma
 .native-camera .phone footer.selecting>.shootrow{position:absolute;visibility:visible;inset:81.93% 0 auto;translate:0 -50%;width:100%;pointer-events:none}
 .native-camera .phone footer.selecting:not(:has([data-picker="滤镜"]:not([hidden])))>.shootrow #toggle{display:none}
 .native-camera .phone footer.selecting.settling-home>.bottom{visibility:visible}
+.native-camera .dock-label-layer{position:absolute;z-index:50;display:grid;place-items:center;translate:-50% -50%;white-space:nowrap;pointer-events:none}
 .native-camera .phone footer.settling-home :is(#panel,.bottom-selector),
 .native-camera .phone footer.settling-home :is(#panel,.bottom-selector) *{-webkit-text-fill-color:transparent;text-shadow:none}
 .native-camera .phone footer.selecting .shootrow .capture-tools{position:absolute;bottom:calc(100% + 15px);translate:none;pointer-events:auto}
@@ -1314,17 +1333,19 @@ window.finishWide48=ok=>{
     if(activeSelector==='格式')drawBottom()
 };
 let pendingLens=null,lensTimeout,lensPress=null;
+let nextZoomID=0,pendingZoomID=null;
 let pinchFrame=null,pinchTarget=null;
 function clearZoomInput(){
     if(pinchFrame!==null)cancelAnimationFrame(pinchFrame);
-    pinchFrame=null;pinchTarget=null;pendingLens=null;lensPress=null;clearTimeout(lensTimeout);
+    pinchFrame=null;pinchTarget=null;pendingLens=null;pendingZoomID=null;lensPress=null;clearTimeout(lensTimeout);
     fingers.clear();pinchDistance=0
 }
 function placeLens(value){const index=window.nativeCameraState.lenses.indexOf(value);tools.style.setProperty('--active-slot',String(Math.max(0,index)))}
 function paintLens(){
     const state=window.nativeCameraState;
-    const selected=lensPress?.value??pendingLens??state.lenses.filter(value=>value<=zoom+.001).at(-1);
-    const shownZoom=lensPress?.value??pendingLens??zoom;
+    const target=state.zoomSettling&&Number.isFinite(state.zoomTarget)?state.zoomTarget:zoom;
+    const shownZoom=lensPress?.value??pendingLens??target;
+    const selected=state.lenses.filter(value=>value<=shownZoom+.001).at(-1);
     placeLens(selected);
     for(const button of tools.querySelectorAll('[data-step]')){
         const value=Number(button.dataset.step),active=value===selected;
@@ -1363,10 +1384,24 @@ function makeLensButton(value){
 glideZoom=value=>{
     if(!hardwareReady()||!window.nativeCameraState.lenses.includes(value))return;
     if(pinchFrame!==null){cancelAnimationFrame(pinchFrame);pinchFrame=null;pinchTarget=null}
+    const state=window.nativeCameraState;
+    if(Number.isInteger(state.zoomRequestID)&&(pendingLens===value||
+        (pendingZoomID===null&&nextZoomID<=state.zoomRequestID&&Math.abs((state.zoomSettling?state.zoomTarget:state.zoom)-value)<.001))){
+        paintLens();return
+    }
     pendingLens=value;paintLens();clearTimeout(lensTimeout);
-    lensTimeout=setTimeout(()=>{pendingLens=null;paintLens()},2200);
-    send('zoom',{value,inputRevision:window.nativeCameraState.inputRevision})
+    lensTimeout=setTimeout(()=>{pendingLens=null;pendingZoomID=null;paintLens()},2200);
+    sendZoom(value,state,true)
 };
+function sendZoom(value,state,fromButton){
+    const command={value,inputRevision:state.inputRevision};
+    if(Number.isSafeInteger(state.zoomRequestID)){
+        nextZoomID=Math.max(nextZoomID,state.zoomRequestID)+1;
+        command.zoomRequestID=nextZoomID;
+        pendingZoomID=fromButton?nextZoomID:null
+    }
+    send('zoom',command)
+}
 function flushPinch(){
     pinchFrame=null;
     const value=pinchTarget,state=window.nativeCameraState;
@@ -1374,18 +1409,20 @@ function flushPinch(){
     if(value===null||!hardwareReady(state)||!state.lenses.length)return;
     const limits=state.zoomRange;
     const bounded=limits?Math.min(limits[1],Math.max(limits[0],value)):value;
-    send('zoom',{value:bounded,inputRevision:state.inputRevision});
+    sendZoom(bounded,state,false);
     pinchFrame=requestAnimationFrame(flushPinch)
 }
 reviewZoom=value=>{
     if(!Number.isFinite(value)||!hardwareReady())return;
-    if(pendingLens!==null){pendingLens=null;clearTimeout(lensTimeout);paintLens()}
+    if(pendingLens!==null){pendingLens=null;pendingZoomID=null;clearTimeout(lensTimeout);paintLens()}
     pinchTarget=value;
     if(pinchFrame===null)flushPinch()
 };
 window.receiveCamera=state=>{
     const prev=window.nativeCameraState,oldNight=nightMode,oldCodec=previewCodec;
     if(Number.isInteger(state?.inputRevision)&&Number.isInteger(prev.inputRevision)&&state.inputRevision<prev.inputRevision)return;
+    if(state?.inputRevision===prev.inputRevision&&Number.isSafeInteger(state?.zoomRequestID)&&
+        Number.isSafeInteger(prev.zoomRequestID)&&state.zoomRequestID<prev.zoomRequestID)return;
     if(prev.inputRevision!==state?.inputRevision)clearZoomInput();
     // A partial report must not borrow a size/codec (or an idle flag) from the previous lens.
     const list=(items,valid)=>Array.isArray(items)?items.filter(valid):[];
@@ -1429,8 +1466,9 @@ window.receiveCamera=state=>{
     if(!hardwareReady(state))lensPress=null;
     // Delayed native reports from the previous tap must not repaint the current target.
     // Pinch/flip supersedes the target immediately; the timeout also recovers rejected taps.
-    if(!hardwareReady(state)||!state.lenses.includes(pendingLens)){
-        pendingLens=null;clearTimeout(lensTimeout)
+    if(!hardwareReady(state)||!state.lenses.includes(pendingLens)||
+        (pendingZoomID!==null&&state.zoomRequestID>=pendingZoomID)){
+        pendingLens=null;pendingZoomID=null;clearTimeout(lensTimeout)
     }
     paintLens();
     // Repaint only the open picker whose values/availability changed. Never rebuild a live filter drag.

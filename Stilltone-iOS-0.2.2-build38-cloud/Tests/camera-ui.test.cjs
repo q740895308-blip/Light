@@ -64,6 +64,28 @@ test('lens press centers and highlights before release; stale ramps and drags do
     half.onpointermove({pointerId:3,clientX:65,clientY:44});release(half,3);
     eq(selected(),2);eq(t.messages.filter(m=>m.type==='zoom').length,2);
 });
+test('only the newest zoom acknowledgement settles rapid button taps',()=>{
+    const snapshot=patch=>state({inputRevision:5,zoomRequestID:7,zoomTarget:1,lenses:[.5,1,2,3],...patch});
+    const t=ready(snapshot({}));
+    const selected=()=>Number(t.run("tools.querySelector('[aria-pressed=true]').dataset.step"));
+    lens(t,3).click();lens(t,2).click();lens(t,2).click();
+    const bridge=fs.readFileSync(path.join(path.dirname(file),'StudioApp.swift'),'utf8');
+    const idKey=bridge.match(/case "zoom":c\.selectLens\([^\n]*requestID:\s*payload\["(\w+)"\]/)?.[1];
+    assert.ok(idKey,'native zoom command must read the request identifier');
+    eq(t.messages.filter(m=>m.type==='zoom').map(m=>[m.value,m[idKey]]),[[3,8],[2,9]]);
+    t.report(snapshot({zoom:3,zoomRequestID:8,zoomTarget:3}));
+    eq(selected(),2);
+    t.report(snapshot({zoom:1.5,zoomSettling:true,zoomRequestID:9,zoomTarget:2}));
+    eq(selected(),2);
+    t.report(snapshot({zoom:2,zoomRequestID:9,zoomTarget:2}));
+    t.report(snapshot({zoom:3,zoomRequestID:8,zoomTarget:3}));
+    eq(t.run('zoom'),2);eq(selected(),2);
+    lens(t,3).click();
+    t.report(snapshot({zoom:2,zoomRequestID:10,zoomTarget:2}));
+    eq(selected(),2);
+    t.report(snapshot({inputRevision:6,zoomRequestID:0,lenses:[1],zoom:1}));
+    eq(selected(),1);
+});
 test('native report, not tools click/bubbling or requested zoom, owns MP',()=>{
     const t=ready({sizes:[8],zoom:2});badge(t,'HEIF',8);lens(t,1).click();eq(last(t,'zoom'),{type:'zoom',value:1});
     badge(t,'HEIF',8);shot(t,{mp:8,codec:'HEIF'});t.open('格式');eq(labels(t.row('分辨率')),['8MP']);

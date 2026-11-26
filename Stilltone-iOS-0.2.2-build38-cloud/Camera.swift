@@ -254,6 +254,8 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
     @Published private(set) var opticalZoomStops: [Double] = [1]
     private var rearLensPresets: [Double] = []
     @Published var lens: Double = 1
+    @Published private(set) var zoomTarget = 1.0
+    @Published private(set) var zoomRequestID = 0
     @Published private(set) var zoomSettling = false
     @Published private(set) var inputRevision = 0
     private var currentInputRevision = 0
@@ -467,7 +469,7 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
     private var requestedThumbnailLooks: [Look] = []
     private var atlasRequest: ((String?) -> Void)?
     private var thumbnailGeneration: UInt64 = 0
-    private var lastThumbnailTime = -Double.infinity
+    private var nextThumbnailTime = 0.0
     private var lastThumbnailPTS = CMTime.invalid
     func setNativeThumbnailLooks(_ looks: [Look]) {
         lock.lock(); defer { lock.unlock() }
@@ -602,13 +604,13 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
     }
     private func wideFactor(_ device: AVCaptureDevice) -> CGFloat {
         guard device.isVirtualDevice else { return 1 }
+        if #available(iOS 18.0, *) {
+            let multiplier = device.displayVideoZoomFactorMultiplier
+            if multiplier.isFinite && multiplier > 0 { return 1 / multiplier }
+        }
         let factors = [CGFloat(1)] + device.virtualDeviceSwitchOverVideoZoomFactors.map { CGFloat($0.doubleValue) }
         if let index = device.constituentDevices.firstIndex(where: { $0.deviceType == .builtInWideAngleCamera }), index < factors.count {
             return factors[index]
-        }
-        if #available(iOS 18.0, *), device.isVirtualDevice {
-            let multiplier = device.displayVideoZoomFactorMultiplier
-            if multiplier.isFinite && multiplier > 0 { return 1 / multiplier }
         }
         return 1
     }
@@ -621,7 +623,9 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
             device.videoZoomFactor = min(device.maxAvailableVideoZoomFactor,max(device.minAvailableVideoZoomFactor,CGFloat(displayZoom)*base))
             let actual = Double(device.videoZoomFactor/base)
             requestedDisplayZoom = actual
-            DispatchQueue.main.async { self.lens = actual; self.zoomSettling = false }
+            DispatchQueue.main.async {
+                self.lens = actual; self.zoomTarget = actual; self.zoomSettling = false
+            }
         } catch { report(error.localizedDescription) }
     }
     // Called under the device configuration lock. Other focal lengths keep their
@@ -692,7 +696,13 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
         orient()
         session.commitConfiguration()
         updatePhotoCapabilities(restoringZoom:accepted ? zoom : requestedDisplayZoom)
+        if accepted { advanceInputRevision() }
         return accepted
+    }
+    private func advanceInputRevision() {
+        currentInputRevision += 1
+        let revision = currentInputRevision
+        DispatchQueue.main.async { self.inputRevision = revision }
     }
     private func beginPreviewTransition() -> UUID? {
         lock.lock(); let buffer = lastDisplayBuffer, recipe = selected; lock.unlock()
@@ -715,7 +725,6 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
     private func suspendPreviewFrames() {
         lock.lock()
         acceptingPreviewFrames = false; latest = nil; lastDisplayBuffer = nil; waitingForPreview = nil
-        lastThumbnailPTS = .invalid; lastThumbnailTime = -.infinity
         previewSourceGeneration &+= 1
         lock.unlock()
     }
@@ -841,8 +850,9 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
                 self.refreshMacroState(changed)
                 guard !changed.isRampingVideoZoom else { return }
                 let actual = Double(changed.videoZoomFactor / self.wideFactor(changed))
+                self.requestedDisplayZoom = actual
                 let choices = self.sizeChoices(changed, highResolution:self.mainZoom(changed))
-                DispatchQueue.main.async { self.zoomSettling = false; self.lens = actual; self.sizesMP = choices }
+                DispatchQueue.main.async { self.zoomSettling = false; self.lens = actual; self.zoomTarget = actual; self.sizesMP = choices }
             }
         }
     }
@@ -922,28 +932,49 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
             self.supportsAutoFlash = autoFlash
         }
     }
-    func selectLens(_ requested: Double, inputRevision: Int? = nil) { capture.async {
-        guard self.active, requested.isFinite, inputRevision == nil || inputRevision == self.currentInputRevision,
-              !self.captureInFlight, let device = self.input?.device else { return }
+    func selectLens(_ requested: Double, inputRevision: Int? = nil, requestID: Int? = nil) { capture.async {
+        guard inputRevision == nil || inputRevision == self.currentInputRevision else { return }
+        func acknowledge(_ target: Double, actual: Double, settling: Bool) {
+            DispatchQueue.main.async {
+                self.lens = actual; self.zoomTarget = target; self.zoomSettling = settling
+                if let requestID { self.zoomRequestID = requestID }
+            }
+        }
+        guard let device = self.input?.device else {
+            acknowledge(self.requestedDisplayZoom,actual:self.requestedDisplayZoom,settling:false); return
+        }
         let base = self.wideFactor(device)
+        func acknowledgeDevice() {
+            let actual = Double(device.videoZoomFactor / base)
+            acknowledge(device.isRampingVideoZoom ? self.requestedDisplayZoom : actual,
+                        actual:actual,settling:device.isRampingVideoZoom)
+        }
+        guard self.active, requested.isFinite, !self.captureInFlight else { acknowledgeDevice(); return }
         let factor = min(device.maxAvailableVideoZoomFactor,max(device.minAvailableVideoZoomFactor,CGFloat(requested)*base))
+        let target = Double(factor/base)
+        let accepted = device.isRampingVideoZoom ? self.requestedDisplayZoom : Double(device.videoZoomFactor/base)
+        if abs(target-accepted)<0.0001 { acknowledgeDevice(); return }
         do {
             try device.lockForConfiguration(); defer { device.unlockForConfiguration() }
-            let current = Double(device.videoZoomFactor/base), target = Double(factor/base)
+            let current = Double(device.videoZoomFactor/base)
+            if device.isRampingVideoZoom && (target-current)*(self.requestedDisplayZoom-current) <= 0 {
+                device.cancelVideoZoomRamp()
+            }
             let switches = [1.0] + device.virtualDeviceSwitchOverVideoZoomFactors.map(\.doubleValue)
             let teleIndex = device.constituentDevices.firstIndex(where:{ $0.deviceType == .builtInTelephotoCamera })
             let tele = teleIndex.flatMap { switches.indices.contains($0) ? switches[$0]/Double(base) : nil }
             let crossesTele = tele.map { (target >= $0-0.001) != (current >= $0-0.001) } ?? false
             let distance = abs(log2(Double(factor/device.videoZoomFactor)))
-            if device.isVirtualDevice { self.setFallbackLenses(device,displayZoom:target) }
+            if device.isVirtualDevice && !self.autoMacroEnabled &&
+                ((abs(self.requestedDisplayZoom-1) <= 0.001) != (abs(target-1) <= 0.001)) {
+                self.setFallbackLenses(device,displayZoom:target)
+            }
             let rate = Float(max(0.6,min(12,distance/(crossesTele ? 0.48 : 0.28))))
-            device.ramp(toVideoZoomFactor:factor,withRate:rate)
+            if abs(target-current) >= 0.0001 { device.ramp(toVideoZoomFactor:factor,withRate:rate) }
             self.requestedDisplayZoom = target
-            let atMain = abs(target-1) < 0.01 && self.mainZoom(device)
-            let sizes = self.sizeChoices(device,highResolution:atMain)
             let actual = Double(device.videoZoomFactor/base), settling = device.isRampingVideoZoom
-            DispatchQueue.main.async { self.lens = actual; self.sizesMP = sizes; self.zoomSettling = settling }
-        } catch { self.report(error.localizedDescription) }
+            acknowledge(target,actual:actual,settling:settling)
+        } catch { acknowledgeDevice(); self.report(error.localizedDescription) }
     } }
     func flip(inputRevision: Int? = nil) { capture.async {
         guard self.active, !self.captureInFlight, let old = self.input,
@@ -971,9 +1002,7 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
         self.preparePhotoFormat(next.device); self.orient(); self.session.commitConfiguration()
         self.updatePhotoCapabilities(restoringZoom:restore?.zoom ?? 1)
         self.resumePreviewFrames(next.device,cover:cover)
-        self.currentInputRevision += 1
-        let revision = self.currentInputRevision
-        DispatchQueue.main.async { self.inputRevision = revision }
+        self.advanceInputRevision()
     } }
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
@@ -993,21 +1022,14 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
     }
     // The opening request and capture delegate reserve the same single worker under lock.
     private func scheduleThumbnailsLocked(_ buffer: CVPixelBuffer, pts: CMTime, now: Double) {
-        guard !thumbnailRendering, nativeThumbnails || atlasRequest != nil else { return }
-        let thermal = ProcessInfo.processInfo.thermalState
-        let maximumRate: Double = thermal == .serious || thermal == .critical ? 12 : 60
-        let minimumInterval = 1 / maximumRate - 0.00025
-        if pts.isNumeric && lastThumbnailPTS.isNumeric {
-            let order = CMTimeCompare(pts,lastThumbnailPTS)
-            guard order != 0 else { return }
-            // A new clock epoch or a timestamp reset starts a fresh capture timeline.
-            if pts.epoch == lastThumbnailPTS.epoch && order > 0 &&
-                CMTimeSubtract(pts,lastThumbnailPTS).seconds < minimumInterval { return }
-        } else if now - lastThumbnailTime < minimumInterval { return }
+        guard !thumbnailRendering, nativeThumbnails || atlasRequest != nil, now >= nextThumbnailTime,
+              !pts.isNumeric || !lastThumbnailPTS.isNumeric || CMTimeCompare(pts,lastThumbnailPTS) != 0 else { return }
         let recipe = selected, generation = thumbnailGeneration, source = previewSourceGeneration, deliver = atlasRequest
         let edge: CGFloat = deliver == nil ? 224 : requestedThumbnailEdge
         let looks = deliver == nil ? nativeThumbnailLooks : requestedThumbnailLooks
-        atlasRequest = nil; thumbnailRendering = true; lastThumbnailPTS = pts; lastThumbnailTime = now
+        let thermal = ProcessInfo.processInfo.thermalState
+        let fps: Double = thermal == .serious || thermal == .critical ? 12 : 30
+        atlasRequest = nil; thumbnailRendering = true; lastThumbnailPTS = pts; nextThumbnailTime = now + 1.0/fps - 0.002
         thumbnailQueue.async { autoreleasepool {
             let batch = self.renderThumbnailBatch(buffer, recipe:recipe, generation:generation, source:source, edge:edge, looks:looks, forWeb:deliver != nil)
             DispatchQueue.main.async {

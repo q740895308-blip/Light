@@ -19,6 +19,7 @@ jobs:
           node Tests/native-lut-sizes.cjs
           node Tests/capture-lifecycle.cjs
           node Tests/photo-dimensions.cjs
+          node Tests/zoom-ramp.cjs
       - name: Verify touch layout in WebKit
         run: |
           npm install --prefix "$RUNNER_TEMP/ui-check" --no-audit --no-fund playwright-core@1.56.1

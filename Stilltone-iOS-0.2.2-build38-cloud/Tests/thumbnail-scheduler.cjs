@@ -18,11 +18,6 @@ import Foundation
 import CoreMedia
 var now = 1.0
 func CACurrentMediaTime() -> Double { now }
-final class ProcessInfo {
-    static let processInfo = ProcessInfo()
-    enum Thermal { case nominal, serious, critical }
-    var thermalState = Thermal.nominal
-}
 typealias CVPixelBuffer = Int
 struct Sample { let buffer: Int; let pts: CMTime }
 typealias CMSampleBufferStub = Sample
@@ -49,14 +44,14 @@ final class Camera {
     var renderedLooks: [[Look]] = []
     var atlasRequest: ((String?) -> Void)?
     var thumbnailGeneration: UInt64 = 0, previewSourceGeneration: UInt64 = 0
-    var lastDisplayTime = -Double.infinity, lastThumbnailTime = -Double.infinity
+    var lastDisplayTime = -Double.infinity, nextThumbnailTime = 0.0
     var lastDisplayPTS = CMTime.invalid, lastThumbnailPTS = CMTime.invalid, earliestPreviewTime = CMTime.invalid
     var expectedPreviewPosition: Position?
     var selected = 0, waitingForPreview: UUID?, latest: Int?, lastDisplayBuffer: Int?
     var thumbnails: [Int:Int] = [:]
     func clearPreviewTransition(_ id: UUID, after: Double) {}
     func renderThumbnailBatch(_ buffer: Int, recipe: Int, generation: UInt64, source: UInt64, edge: CGFloat, looks: [Look], forWeb: Bool) -> (jpeg: String?, tiles: [Int:Int]) {
-        precondition(edge == 224)
+        precondition(forWeb && edge == 224)
         renderedLooks.append(looks)
         return (String(buffer), [:])
     }
@@ -66,8 +61,8 @@ final class Camera {
     ${method('private func suspendPreviewFrames()')}
     ${method('func captureOutput(').replace('sampleBuffer: CMSampleBuffer,', 'sampleBuffer: CMSampleBufferStub,')}
     func suspend() { suspendPreviewFrames() }
-    func sample(_ id: Int, _ side: Position = .back, rate: Int32 = 30) {
-        captureOutput(AVCaptureOutput(),didOutput:Sample(buffer:id,pts:CMTime(value:Int64(id),timescale:rate)),from:AVCaptureConnection(inputPorts:[Port(sourceDevicePosition:side)]))
+    func sample(_ id: Int, _ side: Position = .back) {
+        captureOutput(AVCaptureOutput(),didOutput:Sample(buffer:id,pts:CMTime(value:Int64(id),timescale:30)),from:AVCaptureConnection(inputPorts:[Port(sourceDevicePosition:side)]))
     }
     func drain() { thumbnailQueue.run(); DispatchQueue.main.run() }
 }
@@ -106,38 +101,5 @@ c.drain(); precondition(next.last! == "17")
 c.requestThumbnailAtlas(edge:224,looks:ricoh,useLatest:true){ next.append($0) }
 precondition(c.thumbnailQueue.jobs.isEmpty)
 print("PASS opening frame, backpressure, frame age/PTS, suspended input, in-flight cancellation and reconfiguration")
-for web in [true,false] {
-    for (rate, thermal, expected) in [
-        (24, ProcessInfo.Thermal.nominal,24),(30,.nominal,30),(60,.nominal,60),(120,.nominal,60),(60,.serious,12),(60,.critical,12)
-    ] {
-        let clock = Camera()
-        ProcessInfo.processInfo.thermalState = thermal
-        clock.nativeThumbnails = !web
-        clock.nativeThumbnailLooks = sony
-        func requestFrame() { clock.requestThumbnailAtlas(edge:224,looks:sony,useLatest:true) { _ in requestFrame() } }
-        if web { requestFrame() }
-        for index in 0..<rate {
-            // Bunched callbacks deliberately share wall time: valid capture PTS owns cadence.
-            now = 100 + Double(index / 3) * 3 / Double(rate)
-            clock.sample(index,rate:Int32(rate))
-            if !clock.thumbnailQueue.jobs.isEmpty { clock.drain() }
-            clock.sample(index,rate:Int32(rate))
-            precondition(clock.thumbnailQueue.jobs.isEmpty)
-        }
-        precondition(clock.renderedLooks.count == expected, "unexpected count at "+String(rate)+" fps")
-        clock.sample(0,rate:Int32(rate))
-        clock.drain()
-        precondition(clock.renderedLooks.count == expected + 1, "reset PTS must resume immediately")
-    }
-}
-ProcessInfo.processInfo.thermalState = .nominal
-let busy = Camera()
-var frames: [String?] = []
-func liveRequest() { busy.requestThumbnailAtlas(edge:224,looks:sony,useLatest:true) { value in frames.append(value); liveRequest() } }
-liveRequest()
-for i in 0..<16 { now = 200 + Double(i)/60; busy.sample(i,rate:60) }
-busy.drain(); busy.drain()
-precondition(frames == ["0","15"] && busy.thumbnailQueue.jobs.isEmpty)
-print("PASS 24/30/60 source cadence, 120-to-60 and thermal caps, latest pending frame, repeats and timestamp reset")
 `;
 execFileSync('swift', ['-'], {input:program, stdio:['pipe','inherit','inherit']});

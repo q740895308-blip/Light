@@ -535,7 +535,8 @@ private struct SharedControls: UIViewRepresentable {
             let state:[String:Any] = ["ready":owner.shootViewActive && c.ready,"busy":c.busy || c.saveIssue != nil || c.message != nil,"lenses":c.lenses,"zoom":c.lens,"zoomSettling":c.zoomSettling,"sizes":c.sizesMP,"formats":c.sizesMP.isEmpty ? [] : formats,"mode48":c.highResolutionActive,"alternate48":c.alternate48Available,"live":c.liveAvailable,"liveSuspended":c.liveSuspended,"flash":c.flashAvailable,"savedID":c.lastSavedID,"focusLocked":c.focusLocked,"biasLimits":c.biasLimits,"autoFlash":c.supportsAutoFlash,"filteredLive":true,
                 "controlRotation":rotation == 270 ? -90 : rotation, "reduceTransparency":owner.reduceTransparency, "shootViewActive":owner.shootViewActive,
                 "zoomRange":c.zoomRange,"opticalZoomStops":c.opticalZoomStops,
-                "normalSizes":c.normalSizesWhenReturning,"inputRevision":c.inputRevision,"macroVisible":c.macroVisible,"macroEnabled":c.macroEnabled,"macroSymbol":Self.macroSymbol]
+                "normalSizes":c.normalSizesWhenReturning,"inputRevision":c.inputRevision,"macroVisible":c.macroVisible,"macroEnabled":c.macroEnabled,"macroSymbol":Self.macroSymbol,
+                "zoomTarget":c.zoomTarget,"zoomRequestID":c.zoomRequestID]
             if let data = try? JSONSerialization.data(withJSONObject:state,options:.sortedKeys), data != lastState {
                 lastState = data
                 STCallPageScript(web, "window.receiveCamera(state)", ["state":state]) { [weak self] _, error in
@@ -652,7 +653,7 @@ private struct SharedControls: UIViewRepresentable {
                     self.publish()
                     if let web = self.web { STCallPageScript(web, "window.finishWide48(ok)", ["ok":ok], nil) }
                 }
-            case "zoom":c.selectLens(number("value"),inputRevision:payload["inputRevision"] as? Int)
+            case "zoom":c.selectLens(number("value"),inputRevision:payload["inputRevision"] as? Int,requestID:payload["zoomRequestID"] as? Int)
             case "macro":
                 if let enabled = payload["enabled"] as? Bool { c.setAutoMacro(enabled) }
             case "flip":c.flip(inputRevision:payload["inputRevision"] as? Int)
