@@ -495,8 +495,8 @@ private struct SharedControls: UIViewRepresentable {
                 "normalSizes":c.normalSizesWhenReturning,"inputRevision":c.inputRevision,"macroVisible":c.macroVisible,"macroEnabled":c.macroEnabled,"macroSymbol":Self.macroSymbol]
             if let data = try? JSONSerialization.data(withJSONObject:state,options:.sortedKeys), data != lastState {
                 lastState = data
-                web.callAsyncJavaScript("window.receiveCamera(state)",arguments:["state":state],in:nil,in:.page) { [weak self] result in
-                    guard case .failure = result, let self, self.lastState == data else { return }
+                STCallPageScript(web, "window.receiveCamera(state)", ["state":state]) { [weak self] _, error in
+                    guard error != nil, let self, self.lastState == data else { return }
                     self.lastState = Data()
                 }
             }
@@ -504,8 +504,8 @@ private struct SharedControls: UIViewRepresentable {
             if !c.lastSavedID.isEmpty, sentThumbID != c.lastSavedID {
                 let id = c.lastSavedID
                 sentThumbID = id
-                web.callAsyncJavaScript("await window.receiveSavedThumbnail(id,jpeg,animate); return true",arguments:["id":id,"jpeg":c.latestThumbJPEG ?? "","animate":id != initialSavedID],in:nil,in:.page) { [weak self] result in
-                    if case .failure = result, self?.sentThumbID == id { self?.sentThumbID = "" }
+                STCallPageScript(web, "await window.receiveSavedThumbnail(id,jpeg,animate); return true", ["id":id,"jpeg":c.latestThumbJPEG ?? "","animate":id != initialSavedID]) { [weak self] _, error in
+                    if error != nil, self?.sentThumbID == id { self?.sentThumbID = "" }
                 }
             }
             syncThumbnailRail()
@@ -532,11 +532,11 @@ private struct SharedControls: UIViewRepresentable {
                 guard let self, self.thumbnailsActive, self.railEpoch == epoch, let web = self.web else { return }
                 guard let atlas else { self.requestThumbnail(); return } // retry only on another sample
                 self.webDelivery = epoch
-                web.callAsyncJavaScript("await window.receiveThumbs(atlas,looks,version); return true", arguments:["version":pageVersion,"atlas":atlas,"looks":Look.allCases.map(\.rawValue)], in:nil, in:.page) { [weak self] result in
+                STCallPageScript(web, "await window.receiveThumbs(atlas,looks,version); return true", ["version":pageVersion,"atlas":atlas,"looks":Look.allCases.map(\.rawValue)]) { [weak self] _, error in
                     guard let self, self.webDelivery == epoch else { return }
                     self.webDelivery = nil
                     guard self.thumbnailsActive else { return }
-                    if case .failure = result, self.railEpoch == epoch {
+                    if error != nil, self.railEpoch == epoch {
                         // A transient bridge failure must not leave an open rail frozen.
                         // Wait before requesting another fresh frame; no batches are queued.
                         DispatchQueue.main.asyncAfter(deadline:.now() + 1) { [weak self] in
@@ -580,7 +580,7 @@ private struct SharedControls: UIViewRepresentable {
                 c.setHighResolution(payload["enabled"] as? Bool == true) { [weak self] ok in
                     guard let self else { return }
                     self.publish()
-                    self.web?.callAsyncJavaScript("window.finishWide48(ok)",arguments:["ok":ok],in:nil,in:.page,completionHandler:nil)
+                    if let web = self.web { STCallPageScript(web, "window.finishWide48(ok)", ["ok":ok], nil) }
                 }
             case "zoom":c.selectLens(number("value"),inputRevision:payload["inputRevision"] as? Int)
             case "macro":

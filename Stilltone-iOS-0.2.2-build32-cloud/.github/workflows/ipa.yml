@@ -25,6 +25,8 @@ jobs:
           app="$RUNNER_TEMP/device/FLCamera.app"
           executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Info.plist")
           xcrun lipo "$app/$executable" -verify_arch arm64
+          # Older runtimes expose WebKit's Objective-C API without the Swift overlay.
+          xcrun otool -l "$app/$executable" | awk '$1=="cmd" {op=$2} $1=="name" && /libswiftWebKit\.dylib/ && op=="LC_LOAD_DYLIB" {print "Required WebKit overlay"; bad=1} END {exit bad}'
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Info.plist")" = 0.2.2
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Info.plist")" = 32
           cmp Stilltone-Album.html "$app/Stilltone-Album.html"

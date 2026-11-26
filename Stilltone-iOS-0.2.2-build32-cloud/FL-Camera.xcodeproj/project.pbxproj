@@ -100,6 +100,10 @@
 				<string>16.0</string>
 				<key>LD_RUNPATH_SEARCH_PATHS</key>
 				<string>$(inherited) @executable_path/Frameworks</string>
+				<key>OTHER_LDFLAGS</key>
+				<string>$(inherited) -weak-lswiftWebKit</string>
+				<key>SWIFT_OBJC_BRIDGING_HEADER</key>
+				<string>PageScript.h</string>
 				<key>MARKETING_VERSION</key>
 				<string>0.2.2</string>
 				<key>PRODUCT_BUNDLE_IDENTIFIER</key>
@@ -401,6 +405,10 @@
 				<string>16.0</string>
 				<key>LD_RUNPATH_SEARCH_PATHS</key>
 				<string>$(inherited) @executable_path/Frameworks</string>
+				<key>OTHER_LDFLAGS</key>
+				<string>$(inherited) -weak-lswiftWebKit</string>
+				<key>SWIFT_OBJC_BRIDGING_HEADER</key>
+				<string>PageScript.h</string>
 				<key>MARKETING_VERSION</key>
 				<string>0.2.2</string>
 				<key>PRODUCT_BUNDLE_IDENTIFIER</key>
