@@ -52,8 +52,12 @@ jobs:
           path: FLCamera-unsigned.ipa
           if-no-files-found: error
   simulator:
-    runs-on: macos-15-intel
+    runs-on: macos-15
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        device: [iPhone-SE-3rd-generation, iPhone-16-Pro-Max]
     steps:
       - uses: actions/checkout@v4
       - name: Build and launch on compact and Max iPhone simulators
@@ -61,4 +65,4 @@ jobs:
         run: |
           set -euo pipefail
           xcodebuild -project FL-Camera.xcodeproj -target FLCamera -configuration Release -sdk iphonesimulator ARCHS="$(uname -m)" CODE_SIGN_IDENTITY=- CONFIGURATION_BUILD_DIR="$RUNNER_TEMP/simulator" build
-          bash Tests/simulator-launch.sh "$RUNNER_TEMP/simulator/FLCamera.app"
+          bash Tests/simulator-launch.sh "$RUNNER_TEMP/simulator/FLCamera.app" "${{ matrix.device }}"

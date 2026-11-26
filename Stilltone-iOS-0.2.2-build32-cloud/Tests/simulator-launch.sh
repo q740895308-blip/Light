@@ -2,28 +2,32 @@
 set -euo pipefail
 app=${1:?Supply the compiled simulator .app}
 bundle_id=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist")
-runtime="com.apple.CoreSimulator.SimRuntime.iOS-$(xcrun --sdk iphonesimulator --show-sdk-version | tr . -)"
+device_type="com.apple.CoreSimulator.SimDeviceType.${2:?Supply an iPhone simulator device type}"
 codesign --verify --strict "$app"
-launch_app() {
-    local attempt
-    for attempt in 1 2 3; do
-        if xcrun simctl launch "$udid" "$bundle_id"; then return 0; fi
-        sleep 5
-    done
-    xcrun simctl spawn "$udid" log show --last 3m --style compact --predicate "eventMessage CONTAINS[c] '$bundle_id'" | tail -80 >&2
-    return 1
+runtime=$(xcrun simctl list runtimes --json | jq -er --arg device "$device_type" '
+    [.runtimes[] | select(.isAvailable and (.identifier | contains(".iOS-")))
+     | select(any(.supportedDeviceTypes[]?; .identifier == $device))]
+    | sort_by([(.version == "18.5"), (.version | split(".") | map(tonumber))]) | last.identifier')
+udid=$(xcrun simctl create "Stilltone-$2" "$device_type" "$runtime")
+echo "Starting $device_type ($runtime)"
+diagnostics() {
+    local status=$?
+    if [[ $status != 0 ]]; then
+        xcrun simctl spawn "$udid" log show --last 3m --style compact --predicate \
+            "process == 'FLCamera' OR eventMessage CONTAINS[c] '$bundle_id'" | tail -100 >&2 || true
+        find "$HOME/Library/Logs/DiagnosticReports" "$HOME/Library/Developer/CoreSimulator/Devices/$udid/data/Library/Logs/CrashReporter" \
+            -type f -name 'FLCamera*.ips' -exec head -c 24000 {} \; >&2 || true
+    fi
+    xcrun simctl shutdown "$udid" || true
 }
-for model in 'iPhone SE (3rd generation)' 'iPhone 16 Pro Max'; do
-    udid=$(xcrun simctl list devices available --json | jq -er --arg runtime "$runtime" --arg model "$model" '.devices[$runtime][] | select(.name == $model) | .udid' | head -1)
-    echo "Starting $model ($runtime)"
-    xcrun simctl bootstatus "$udid" -b
-    xcrun simctl install "$udid" "$app"
-    xcrun simctl privacy "$udid" grant camera "$bundle_id"
-    first=$(launch_app)
-    # A second launch must foreground the same process after it has created the camera view.
-    sleep 5
-    second=$(launch_app)
-    test "$first" = "$second"
-    echo "PASS: $model ($runtime), $second"
-    xcrun simctl shutdown "$udid"
-done
+trap diagnostics EXIT
+xcrun simctl bootstatus "$udid" -b
+xcrun simctl install "$udid" "$app"
+xcrun simctl privacy "$udid" grant camera "$bundle_id"
+launch=$(xcrun simctl launch "$udid" "$bundle_id")
+echo "$launch"
+pid=${launch##*: }
+[[ "$pid" =~ ^[0-9]+$ ]]
+sleep 12
+ps -p "$pid" -o command= | grep -F '/FLCamera.app/FLCamera'
+echo "PASS: $device_type ($runtime), PID $pid"

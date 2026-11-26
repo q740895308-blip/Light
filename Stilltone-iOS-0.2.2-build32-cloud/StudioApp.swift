@@ -370,7 +370,12 @@ private struct SharedCapture: View {
     var body: some View {
         ZStack(alignment:.topLeading) {
             Color.black
-            ZStack { CameraFeed(camera:camera); GPUPreview(camera:camera,enabled:shooting && (recipe.look != .original || recipe.ev != 0)).opacity(recipe.look != .original || recipe.ev != 0 ? 1 : 0) }
+            ZStack {
+                CameraFeed(camera:camera)
+                if camera.ready && (recipe.look != .original || recipe.ev != 0) {
+                    GPUPreview(camera:camera, enabled:shooting)
+                }
+            }
                 .frame(width:frame.width,height:frame.height)
                 .overlay {
                     if let image=camera.transitionImage {
