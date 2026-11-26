@@ -56,6 +56,7 @@ test('lens press centers and highlights before release; stale ramps and drags do
     const selected=()=>Number([...t.run('tools').querySelectorAll('[data-step]')].find(b=>b.getAttribute('aria-pressed')==='true')?.dataset.step);
     const three=enter(3,1);
     eq(selected(),3);eq(t.run("tools.style['--active-slot']"),'3');eq(last(t,'zoom'),undefined);
+    eq(three.dispatch('touchend',{changedTouches:[{identifier:1}]}).defaultPrevented,true);
     release(three,1);release(enter(2,2),2);
     t.report(state({lenses:[.5,1,2,3],zoom:3,zoomSettling:false}));
     eq(selected(),2);eq(t.messages.filter(m=>m.type==='zoom').map(m=>m.value),[3,2]);

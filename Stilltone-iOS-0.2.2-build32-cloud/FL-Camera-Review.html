@@ -1003,6 +1003,8 @@ function makeLensButton(value){
         if(moved(event)){cancel(event);return}
         lensPress=null;glideZoom(value)
     };
+    // The rail moves during a press. Suppress the follow-up tap at its old location.
+    button.addEventListener('touchend',event=>event.preventDefault(),{passive:false});
     // Pointer taps commit on release; VoiceOver and keyboard dispatch a standalone click.
     button.onclick=event=>{if(!event?.detail)glideZoom(value)};
     return button
