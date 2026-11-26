@@ -653,7 +653,9 @@ private struct SharedControls: UIViewRepresentable {
                     self.publish()
                     if let web = self.web { STCallPageScript(web, "window.finishWide48(ok)", ["ok":ok], nil) }
                 }
-            case "zoom":c.selectLens(number("value"),inputRevision:payload["inputRevision"] as? Int,requestID:payload["zoomRequestID"] as? Int)
+            case "zoom":
+                c.selectLens(number("value"),inputRevision:payload["inputRevision"] as? Int,requestID:payload["zoomRequestID"] as? Int,
+                             pinchID:payload["pinchID"] as? Int,pinchScale:payload["pinchScale"] as? Double)
             case "macro":
                 if let enabled = payload["enabled"] as? Bool { c.setAutoMacro(enabled) }
             case "flip":c.flip(inputRevision:payload["inputRevision"] as? Int)

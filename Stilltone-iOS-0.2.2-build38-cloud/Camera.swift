@@ -260,6 +260,7 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
     @Published private(set) var inputRevision = 0
     private var currentInputRevision = 0
     private var requestedDisplayZoom = 1.0
+    private var pinchZoom: (id: Int, revision: Int, device: ObjectIdentifier, base: Double)?
     private var parkedRear: (input: AVCaptureDeviceInput, zoom: Double, highResolution: Bool)?
     @Published private(set) var macroVisible = false
     @Published private(set) var macroEnabled = true
@@ -615,6 +616,7 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
         return 1
     }
     private func resetZoom(_ device: AVCaptureDevice, displayZoom: Double = 1) {
+        pinchZoom = nil
         let base = wideFactor(device)
         do {
             try device.lockForConfiguration(); defer { device.unlockForConfiguration() }
@@ -700,6 +702,7 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
         return accepted
     }
     private func advanceInputRevision() {
+        pinchZoom = nil
         currentInputRevision += 1
         let revision = currentInputRevision
         DispatchQueue.main.async { self.inputRevision = revision }
@@ -932,7 +935,8 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
             self.supportsAutoFlash = autoFlash
         }
     }
-    func selectLens(_ requested: Double, inputRevision: Int? = nil, requestID: Int? = nil) { capture.async {
+    func selectLens(_ requested: Double, inputRevision: Int? = nil, requestID: Int? = nil,
+                    pinchID: Int? = nil, pinchScale: Double? = nil) { capture.async {
         guard inputRevision == nil || inputRevision == self.currentInputRevision else { return }
         func acknowledge(_ target: Double, actual: Double, settling: Bool) {
             DispatchQueue.main.async {
@@ -950,7 +954,25 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
                         actual:actual,settling:device.isRampingVideoZoom)
         }
         guard self.active, requested.isFinite, !self.captureInFlight else { acknowledgeDevice(); return }
-        let factor = min(device.maxAvailableVideoZoomFactor,max(device.minAvailableVideoZoomFactor,CGFloat(requested)*base))
+        let displayZoom: Double
+        if let id = pinchID, let scale = pinchScale {
+            guard scale.isFinite && scale > 0 else { acknowledgeDevice(); return }
+            let identity = ObjectIdentifier(device)
+            if let gesture = self.pinchZoom, gesture.id == id, gesture.device == identity,
+               gesture.revision == self.currentInputRevision {
+                displayZoom = gesture.base * scale
+            } else {
+                // The first delivered move samples the live ramp, before it is retargeted.
+                let start = Double(device.videoZoomFactor / base)
+                self.pinchZoom = (id,self.currentInputRevision,identity,start)
+                displayZoom = start * scale
+            }
+        } else {
+            guard pinchID == nil && pinchScale == nil else { acknowledgeDevice(); return }
+            self.pinchZoom = nil
+            displayZoom = requested
+        }
+        let factor = min(device.maxAvailableVideoZoomFactor,max(device.minAvailableVideoZoomFactor,CGFloat(displayZoom)*base))
         let target = Double(factor/base)
         let accepted = device.isRampingVideoZoom ? self.requestedDisplayZoom : Double(device.videoZoomFactor/base)
         if abs(target-accepted)<0.0001 { acknowledgeDevice(); return }

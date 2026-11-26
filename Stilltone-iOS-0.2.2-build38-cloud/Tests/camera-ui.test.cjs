@@ -70,7 +70,7 @@ test('only the newest zoom acknowledgement settles rapid button taps',()=>{
     const selected=()=>Number(t.run("tools.querySelector('[aria-pressed=true]').dataset.step"));
     lens(t,3).click();lens(t,2).click();lens(t,2).click();
     const bridge=fs.readFileSync(path.join(path.dirname(file),'StudioApp.swift'),'utf8');
-    const idKey=bridge.match(/case "zoom":c\.selectLens\([^\n]*requestID:\s*payload\["(\w+)"\]/)?.[1];
+    const idKey=bridge.match(/case "zoom":\s*c\.selectLens\([^)]*\)[\s\S]*?requestID:\s*payload\["(\w+)"\]/)?.[1];
     assert.ok(idKey,'native zoom command must read the request identifier');
     eq(t.messages.filter(m=>m.type==='zoom').map(m=>[m.value,m[idKey]]),[[3,8],[2,9]]);
     t.report(snapshot({zoom:3,zoomRequestID:8,zoomTarget:3}));
@@ -85,6 +85,32 @@ test('only the newest zoom acknowledgement settles rapid button taps',()=>{
     eq(selected(),2);
     t.report(snapshot({inputRevision:6,zoomRequestID:0,lenses:[1],zoom:1}));
     eq(selected(),1);
+});
+test('pinch takes over an in-flight ramp by relative scale and cancels stale frames',()=>{
+    const snapshot=patch=>state({inputRevision:7,zoomRequestID:20,zoom:1,zoomTarget:3,zoomSettling:true,lenses:[.5,1,2,3],...patch});
+    const t=ready(snapshot({})),stage=t.run('stage'),jobs=new Map();let next=0;
+    t.host.requestAnimationFrame=fn=>{jobs.set(++next,fn);return next};
+    t.host.cancelAnimationFrame=id=>jobs.delete(id);
+    const tick=()=>{const frames=[...jobs.values()];jobs.clear();frames.forEach(fn=>fn(1000))};
+    const count=()=>t.messages.filter(m=>m.type==='zoom').length;
+    const touch=(type,id,x)=>stage.dispatch(type,{pointerId:id,clientX:x,clientY:200,isPrimary:id===1});
+    const start=()=>{touch('pointerdown',1,40);touch('pointerdown',2,140)};
+    start();touch('pointermove',2,150);
+    const first=last(t,'zoom');assert.ok(Number.isSafeInteger(first.pinchID));
+    eq(first.pinchScale,1.1);eq(first.value,1.1);
+    touch('pointermove',2,160);touch('pointermove',2,170);eq(count(),1);
+    tick();eq(last(t,'zoom').pinchID,first.pinchID);eq(last(t,'zoom').pinchScale,1.3);
+    touch('pointermove',2,180);touch('pointerup',2,180);
+    eq(last(t,'zoom').pinchScale,1.4);eq(count(),3);tick();eq(count(),3);
+    touch('pointerup',1,40);start();touch('pointermove',2,155);
+    assert.notEqual(last(t,'zoom').pinchID,first.pinchID);eq(count(),4);
+    touch('pointermove',2,170);touch('pointercancel',2,170);tick();eq(count(),4);
+    touch('pointerup',1,40);start();touch('pointermove',2,150);touch('pointermove',2,170);
+    lens(t,2).click();eq(last(t,'zoom').value,2);eq(last(t,'zoom').pinchID,undefined);
+    const stopped=count();touch('pointermove',2,200);tick();eq(count(),stopped);
+    start();touch('pointermove',2,150);touch('pointermove',2,170);
+    const beforeFlip=count();t.report(snapshot({inputRevision:8,zoom:1,zoomTarget:1,zoomSettling:false}));
+    touch('pointermove',2,200);tick();eq(count(),beforeFlip);
 });
 test('native report, not tools click/bubbling or requested zoom, owns MP',()=>{
     const t=ready({sizes:[8],zoom:2});badge(t,'HEIF',8);lens(t,1).click();eq(last(t,'zoom'),{type:'zoom',value:1});

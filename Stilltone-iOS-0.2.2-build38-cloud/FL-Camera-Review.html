@@ -169,10 +169,32 @@ function reviewZoom(request,target){zoom=Math.min(15,Math.max(1,request));const 
 for(const value of zoomKeys){const button=document.createElement('button');button.dataset.step=value;button.disabled=value===.5;button.title=value===.5?'超广角需在 iPhone 上测试':value+'× 桌面数码变焦';button.onclick=()=>glideZoom(value);tools.append(button)}
 sheet.textContent+='.phone .stage{touch-action:none}.phone .capture-tools button[data-step]{border:0;border-radius:50%;width:38px;height:38px;padding:0;background:transparent;color:white}.phone .capture-tools button[data-step][aria-pressed=true]{background:#302d27b8;color:#ffd60a;backdrop-filter:blur(8px)}';
 const fingers=new Map();let pinchDistance=0,pinchZoom=1,lastPinch=-Infinity;
+let pinchID=null,nextPinchID=0,endPinch=()=>{};
 function fingerDistance(){const [first,second]=fingers.values();return Math.hypot(first.x-second.x,first.y-second.y)}
-stage.addEventListener('pointerdown',event=>{if(event.pointerType!=='touch'||event.target.closest('button')||fingers.size>=2||!selector.hidden||!drawer.hidden)return;fingers.set(event.pointerId,{x:event.clientX,y:event.clientY});stage.setPointerCapture(event.pointerId);if(fingers.size===2){cancelAnimationFrame(zoomFrame);pinchDistance=fingerDistance();pinchZoom=zoom}});
-stage.addEventListener('pointermove',event=>{if(!fingers.has(event.pointerId))return;fingers.set(event.pointerId,{x:event.clientX,y:event.clientY});if(fingers.size===2&&pinchDistance>0){reviewZoom(pinchZoom*fingerDistance()/pinchDistance);lastPinch=performance.now()}});
-for(const name of ['pointerup','pointercancel','lostpointercapture'])stage.addEventListener(name,event=>{if(fingers.delete(event.pointerId)&&pinchDistance){lastPinch=performance.now();if(!fingers.size)pinchDistance=0}});
+stage.addEventListener('pointerdown',event=>{
+    if(event.pointerType!=='touch'||event.target.closest('button')||fingers.size>=2||!selector.hidden||!drawer.hidden)return;
+    fingers.set(event.pointerId,{x:event.clientX,y:event.clientY});stage.setPointerCapture(event.pointerId);
+    if(fingers.size===2){
+        cancelAnimationFrame(zoomFrame);pinchDistance=fingerDistance();pinchZoom=zoom;
+        nextPinchID=Math.max(Date.now(),nextPinchID+1);pinchID=nextPinchID
+    }
+});
+stage.addEventListener('pointermove',event=>{
+    if(!fingers.has(event.pointerId))return;
+    fingers.set(event.pointerId,{x:event.clientX,y:event.clientY});
+    if(fingers.size===2&&pinchDistance>0){
+        const scale=fingerDistance()/pinchDistance;
+        if(scale>0){
+            if(cameraBridge)reviewZoom(pinchZoom*scale,pinchID,scale);else reviewZoom(pinchZoom*scale);
+            lastPinch=performance.now()
+        }
+    }
+});
+for(const name of ['pointerup','pointercancel','lostpointercapture'])stage.addEventListener(name,event=>{
+    if(fingers.delete(event.pointerId)&&pinchID!==null){
+        endPinch(name==='pointerup');pinchDistance=0;pinchID=null;lastPinch=performance.now()
+    }
+});
 stage.addEventListener('click',event=>{if(performance.now()-lastPinch<350){event.stopImmediatePropagation();event.preventDefault()}},true);
 stage.addEventListener('wheel',event=>{if(!event.ctrlKey||!selector.hidden||!drawer.hidden)return;event.preventDefault();cancelAnimationFrame(zoomFrame);reviewZoom(zoom*Math.exp(-event.deltaY*.012))},{passive:false});
 const drawer=get('panel'),tileGrid=document.createElement('div');tileGrid.className='tilegrid';drawer.prepend(tileGrid);const rows=[...drawer.querySelectorAll('label.row')],choices=get('choices');choices.hidden=true;rows.forEach(row=>row.hidden=true);
@@ -1338,7 +1360,7 @@ let pinchFrame=null,pinchTarget=null;
 function clearZoomInput(){
     if(pinchFrame!==null)cancelAnimationFrame(pinchFrame);
     pinchFrame=null;pinchTarget=null;pendingLens=null;pendingZoomID=null;lensPress=null;clearTimeout(lensTimeout);
-    fingers.clear();pinchDistance=0
+    fingers.clear();pinchDistance=0;pinchID=null
 }
 function placeLens(value){const index=window.nativeCameraState.lenses.indexOf(value);tools.style.setProperty('--active-slot',String(Math.max(0,index)))}
 function paintLens(){
@@ -1383,7 +1405,7 @@ function makeLensButton(value){
 }
 glideZoom=value=>{
     if(!hardwareReady()||!window.nativeCameraState.lenses.includes(value))return;
-    if(pinchFrame!==null){cancelAnimationFrame(pinchFrame);pinchFrame=null;pinchTarget=null}
+    endPinch(false);fingers.clear();pinchDistance=0;pinchID=null;
     const state=window.nativeCameraState;
     if(Number.isInteger(state.zoomRequestID)&&(pendingLens===value||
         (pendingZoomID===null&&nextZoomID<=state.zoomRequestID&&Math.abs((state.zoomSettling?state.zoomTarget:state.zoom)-value)<.001))){
@@ -1393,8 +1415,9 @@ glideZoom=value=>{
     lensTimeout=setTimeout(()=>{pendingLens=null;pendingZoomID=null;paintLens()},2200);
     sendZoom(value,state,true)
 };
-function sendZoom(value,state,fromButton){
+function sendZoom(value,state,fromButton,gesture){
     const command={value,inputRevision:state.inputRevision};
+    if(gesture?.id!=null){command.pinchID=gesture.id;command.pinchScale=gesture.scale}
     if(Number.isSafeInteger(state.zoomRequestID)){
         nextZoomID=Math.max(nextZoomID,state.zoomRequestID)+1;
         command.zoomRequestID=nextZoomID;
@@ -1402,20 +1425,26 @@ function sendZoom(value,state,fromButton){
     }
     send('zoom',command)
 }
-function flushPinch(){
+function flushPinch(schedule=true){
     pinchFrame=null;
-    const value=pinchTarget,state=window.nativeCameraState;
+    const target=pinchTarget,state=window.nativeCameraState;
     pinchTarget=null;
-    if(value===null||!hardwareReady(state)||!state.lenses.length)return;
+    if(target===null||!hardwareReady(state)||!state.lenses.length||
+        (target.id!=null&&target.id!==pinchID))return;
     const limits=state.zoomRange;
-    const bounded=limits?Math.min(limits[1],Math.max(limits[0],value)):value;
-    sendZoom(bounded,state,false);
-    pinchFrame=requestAnimationFrame(flushPinch)
+    const bounded=limits?Math.min(limits[1],Math.max(limits[0],target.value)):target.value;
+    sendZoom(bounded,state,false,target);
+    if(schedule)pinchFrame=requestAnimationFrame(()=>flushPinch())
 }
-reviewZoom=value=>{
+endPinch=commit=>{
+    if(pinchFrame!==null)cancelAnimationFrame(pinchFrame);
+    pinchFrame=null;
+    if(commit)flushPinch(false);else pinchTarget=null
+};
+reviewZoom=(value,id,scale)=>{
     if(!Number.isFinite(value)||!hardwareReady())return;
     if(pendingLens!==null){pendingLens=null;pendingZoomID=null;clearTimeout(lensTimeout);paintLens()}
-    pinchTarget=value;
+    pinchTarget={value,id,scale};
     if(pinchFrame===null)flushPinch()
 };
 window.receiveCamera=state=>{

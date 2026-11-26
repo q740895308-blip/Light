@@ -134,7 +134,7 @@ final class AVCaptureDevice {
     let position: Facing, multiplier: Double
     let deviceType = Kind.builtInWideAngleCamera
     var isVirtualDevice: Bool { multiplier != 1 }
-    var displayVideoZoomFactorMultiplier: Double { 1 }
+    var displayVideoZoomFactorMultiplier: Double { multiplier }
     var constituentDevices: [Part] { isVirtualDevice ? [.init(deviceType:.builtInUltraWideCamera),.init(deviceType:.builtInWideAngleCamera),.init(deviceType:.builtInTelephotoCamera)] : [] }
     var switches: [NSNumber] = [2,6]
     var virtualDeviceSwitchOverVideoZoomFactors: [NSNumber] { isVirtualDevice ? switches : [] }
@@ -163,6 +163,8 @@ final class Flip {
     let capture=Queue(), session=InputSession()
     var active=true, captureInFlight=false, currentInputRevision=0, inputRevision=0, zoomSettling=false
     var requestedDisplayZoom=1.0, lens=1.0, usingDedicatedWide=false, input:AVCaptureDeviceInput?
+    var zoomTarget=1.0, zoomRequestID=0, autoMacroEnabled=true
+    var pinchZoom:(id:Int, revision:Int, device:ObjectIdentifier, base:Double)?
     var rearLensPresets: [Double] = []
     var parkedRear:(input:AVCaptureDeviceInput,zoom:Double,highResolution:Bool)?
     func deviceInput(_ facing:Facing)->AVCaptureDeviceInput? { AVCaptureDeviceInput(facing,1) }
@@ -187,6 +189,7 @@ final class Flip {
     ${method(camera, 'func selectLens(')}
     func tapAfterReturn(_ requested:Double){ selectLens(requested,inputRevision:inputRevision) }
     ${method(camera, 'private func resetZoom(')}
+    ${method(camera, 'private func advanceInputRevision(')}
     ${method(camera, 'func flip(inputRevision:')}
 }
 let profiles=Flip()
@@ -223,9 +226,13 @@ for high in [false,true] {
             for tap in [2.0,3.0] {
                 let actual=rear.device.videoZoomFactor
                 f.tapAfterReturn(tap)
-                precondition(rear.device.commandedFactor == tap*2)
-                precondition(f.lens == actual/2 && f.zoomSettling)
-                rear.device.videoZoomFactor = rear.device.commandedFactor; rear.device.isRampingVideoZoom=false
+                precondition(f.lens == actual/2 && f.zoomTarget == tap)
+                if actual == tap*2 {
+                    precondition(!f.zoomSettling)
+                } else {
+                    precondition(f.zoomSettling && rear.device.commandedFactor == tap*2)
+                    rear.device.videoZoomFactor = rear.device.commandedFactor; rear.device.isRampingVideoZoom=false
+                }
             }
         }
     }

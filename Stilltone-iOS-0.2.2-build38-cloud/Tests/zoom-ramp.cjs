@@ -36,6 +36,7 @@ struct Input { let device:AVCaptureDevice }
 final class Camera {
     var active=true, captureInFlight=false, currentInputRevision=7, inputRevision=7, capture=Queue(), autoMacroEnabled=true
     var requestedDisplayZoom=1.0, lens=1.0, zoomTarget=1.0, zoomRequestID=0, zoomSettling=false
+    var pinchZoom:(id:Int, revision:Int, device:ObjectIdentifier, base:Double)?
     var sizesMP:[Int]=[], input:Input?
     func sizeChoices(_ d:AVCaptureDevice, highResolution:Bool)->[Int]{ [12] }
     func mainZoom(_ d:AVCaptureDevice)->Bool{ true }
@@ -84,6 +85,25 @@ final class Camera {
         captureInFlight=true
         selectLens(0.5,inputRevision:8,requestID:7)
         precondition(zoomTarget==1 && zoomRequestID==7 && rear.ramps.count==4)
+        captureInFlight=false
+        resetZoom(rear)
+        selectLens(3,inputRevision:8,requestID:8)
+        rear.videoZoomFactor=3 // 1.5x visible, the 3x ramp is still moving
+        selectLens(3.6,inputRevision:8,requestID:9,pinchID:21,pinchScale:1.2)
+        precondition(abs(zoomTarget-1.8)<0.0001 && zoomRequestID==9)
+        rear.videoZoomFactor=3.4
+        selectLens(3.9,inputRevision:8,requestID:10,pinchID:21,pinchScale:1.3)
+        precondition(abs(zoomTarget-1.95)<0.0001)
+        selectLens(3,inputRevision:8,requestID:11)
+        precondition(pinchZoom==nil)
+        rear.videoZoomFactor=4
+        selectLens(4,inputRevision:8,requestID:12,pinchID:22,pinchScale:0.8)
+        precondition(abs(zoomTarget-1.6)<0.0001)
+        advanceInputRevision()
+        precondition(pinchZoom==nil)
+        input=Input(device:front); front.videoZoomFactor=1.25; front.isRampingVideoZoom=false
+        selectLens(2,inputRevision:9,requestID:13,pinchID:22,pinchScale:1.2)
+        precondition(abs(zoomTarget-1.5)<0.0001)
     }
 }
 Camera().check()
