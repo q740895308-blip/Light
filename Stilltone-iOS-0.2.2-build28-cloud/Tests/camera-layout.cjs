@@ -97,8 +97,17 @@ const {chromium,webkit}=require('playwright-core');
             for(const name of ['宽高比','曝光','格式']){
                 if(name!=='宽高比')await page.evaluate(name=>chooseBottom(name,true),name);
                 await page.evaluate(()=>Promise.all(shootRow.getAnimations().map(a=>a.finished)));
+                await page.evaluate(()=>{
+                    const close=foldControls;window.closeSample=null;
+                    foldControls=(...args)=>{
+                        close(...args);
+                        window.closeSample=[footer.classList.contains('settling-home'),getComputedStyle(shootRow).getPropertyValue('--control-lift').trim()];
+                        foldControls=close
+                    }
+                });
                 await page.touchscreen.tap(2,8);
-                assert.ok(await page.evaluate(()=>footer.classList.contains('settling-home')&&getComputedStyle(shootRow).getPropertyValue('--control-lift').trim()==='0px'));
+                await page.waitForFunction(()=>window.closeSample!==null,null,{timeout:2000});
+                assert.deepEqual(await page.evaluate(()=>window.closeSample),[true,'0px'],name+' begins returning immediately');
                 await panel.waitFor({state:'hidden'});
                 await page.evaluate(()=>Promise.all(shootRow.getAnimations().map(a=>a.finished)));
                 assert.deepEqual(await controlBoxes(),baseline,name+' blank-tap return')
