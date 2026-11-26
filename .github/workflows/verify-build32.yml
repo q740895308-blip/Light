@@ -60,5 +60,5 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          xcodebuild -project FL-Camera.xcodeproj -target FLCamera -configuration Release -sdk iphonesimulator ARCHS="$(uname -m)" CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$RUNNER_TEMP/simulator" build
+          xcodebuild -project FL-Camera.xcodeproj -target FLCamera -configuration Release -sdk iphonesimulator ARCHS="$(uname -m)" CODE_SIGN_IDENTITY=- CONFIGURATION_BUILD_DIR="$RUNNER_TEMP/simulator" build
           bash Tests/simulator-launch.sh "$RUNNER_TEMP/simulator/FLCamera.app"
