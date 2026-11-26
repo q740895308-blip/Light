@@ -1,5 +1,4 @@
 import XCTest
-import Darwin
 
 final class MenuUITests: XCTestCase {
     // Read a narrow band between the grabber and the first row of icons.
@@ -43,16 +42,17 @@ final class MenuUITests: XCTestCase {
         let area = CGRect(x: width * 0.25, y: grip.frame.maxY + 3, width: 34, height: 3)
         let uncovered = try stripeSample(in: original, area: area, screenWidth: width)
         XCTAssertGreaterThan(uncovered.contrast, 100, "The simulated camera stripes must be visible at this position")
-        let warm = try stripeSample(in: app.screenshot(), area: area, screenWidth: width)
-        print("UI material ROI \(area), before \(uncovered), after \(warm)")
-        XCTAssertLessThan(warm.contrast, uncovered.contrast / 4, "The open drawer must blur fine detail")
-        XCTAssertGreaterThan(warm.red - warm.blue, 3, "The warm scene must influence the drawer")
-        notify_post("stilltone.ui-test.blue-scene")
+        var sawWarm = false, sawCool = false
         let changed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            guard let cool = try? self.stripeSample(in: app.screenshot(), area: area, screenWidth: width) else { return false }
-            return cool.blue > cool.red + 3 && cool.contrast < uncovered.contrast / 4
+            guard let sample = try? self.stripeSample(in: app.screenshot(), area: area, screenWidth: width) else { return false }
+            print("UI material ROI \(area), original \(uncovered), current \(sample)")
+            if sample.contrast < uncovered.contrast / 4 {
+                sawWarm = sawWarm || sample.red > sample.blue + 3
+                sawCool = sawCool || sample.blue > sample.red + 3
+            }
+            return sawWarm && sawCool
         }, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 6), .completed,
+        XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 12), .completed,
                        "An open drawer must show a changed underlying scene with its detail still blurred")
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = "Live blur over changing simulated viewfinder"

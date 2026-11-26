@@ -1,10 +1,9 @@
 import SwiftUI
-import Darwin
 
 // Included only in the temporary simulator UI-test target.
 struct MenuMaterialTestScene: UIViewRepresentable {
     final class Stripes: UIView {
-        private var token: Int32 = 0
+        private var timer: Timer?
         private var blue = false
 
         override init(frame: CGRect) {
@@ -12,13 +11,20 @@ struct MenuMaterialTestScene: UIViewRepresentable {
             isOpaque = true
             isAccessibilityElement = false
             contentMode = .redraw
-            notify_register_dispatch("stilltone.ui-test.blue-scene", &token, .main) { [weak self] _ in
-                self?.blue = true
-                self?.setNeedsDisplay()
-            }
         }
         required init?(coder: NSCoder) { return nil }
-        deinit { notify_cancel(token) }
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            timer?.invalidate()
+            timer = nil
+            if window != nil {
+                timer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: true) { [weak self] _ in
+                    self?.blue.toggle()
+                    self?.setNeedsDisplay()
+                }
+            }
+        }
+        deinit { timer?.invalidate() }
 
         override func draw(_ rect: CGRect) {
             guard let context = UIGraphicsGetCurrentContext() else { return }
