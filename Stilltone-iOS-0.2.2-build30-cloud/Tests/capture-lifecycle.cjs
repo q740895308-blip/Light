@@ -15,6 +15,7 @@ function method(source, signature) {
     throw Error('Unclosed method ' + signature);
 }
 const program = `
+import Foundation
 final class Queue {
     static let main = Queue()
     var delayed: [() -> Void] = []
