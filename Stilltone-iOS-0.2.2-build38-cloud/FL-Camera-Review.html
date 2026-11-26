@@ -450,8 +450,8 @@ sun.onpointerup=sun.onpointercancel=sun.onlostpointercapture=event=>{
     if(!dragSun||dragSun.id!==event.pointerId)return;
     dragSun=null;fadeFocus();sunReset=setTimeout(()=>{resetSun();refresh()},4000)
 };
-const cachedRailAtlases=new Map();
-function paintRailAtlas(track,image,looks){
+const cachedRailTiles=new Map();
+function paintRailAtlas(track,image,looks,brand){
     const side=image.naturalHeight;
     if(!looks.length||side<=0||image.naturalWidth!==side*looks.length)return false;
     const tiles=new Map([...track.querySelectorAll('canvas[data-look]')].map(canvas=>[canvas.dataset.look,canvas]));
@@ -459,10 +459,12 @@ function paintRailAtlas(track,image,looks){
     if(canvases.includes(undefined))return false;
     const contexts=canvases.map(canvas=>canvas.getContext('2d'));
     if(contexts.some(context=>!context||context.isContextLost?.()))return false;
+    const time=performance.now();
     for(const [i,canvas] of canvases.entries()){
         if(canvas.width!==side||canvas.height!==side){canvas.width=side;canvas.height=side}
         contexts[i].drawImage(image,i*side,0,side,side,0,0,side,side);
-        canvas.dataset.ready='true'
+        canvas.dataset.ready='true';
+        cachedRailTiles.set(brand+'|'+looks[i],{canvas,time})
     }
     track.setAttribute('aria-busy','false');
     return true
@@ -514,7 +516,10 @@ function filterRail(){
     }
     if(cameraBridge)track.setAttribute('aria-busy','true');
     options.forEach((option,index)=>{
-        const button=document.createElement('button'),thumb=surface(96,96);
+        const button=document.createElement('button'),saved=cachedRailTiles.get(filterBrand+'|'+option.value);
+        const warm=cameraBridge&&saved&&performance.now()-saved.time<=2500;
+        const thumb=warm?saved.canvas:surface(96,96);
+        if(warm)track.setAttribute('aria-busy','false');
         thumb.dataset.look=option.value;
         if(cameraBridge){
             const frame=document.createElement('span');frame.className='rail-image';
@@ -524,12 +529,6 @@ function filterRail(){
         button.onclick=()=>{if(option.value===picker.value)foldControls(selector);else select(index,true)};
         track.append(button)
     });
-    // A quick reopen can paint the last complete frame before this panel reaches the screen.
-    const cached=cachedRailAtlases.get(filterBrand);
-    if(cameraBridge&&cached){
-        if(performance.now()-cached.time<=2500)paintRailAtlas(track,cached.image,cached.looks);
-        else cachedRailAtlases.delete(filterBrand)
-    }
     viewport.onpointerdown=event=>{if(event.button!==0||event.isPrimary===false)return;const offset=new DOMMatrixReadOnly(getComputedStyle(track).transform).m41;gesture={id:event.pointerId,x:pickerAxis(event),lastX:pickerAxis(event),time:event.timeStamp,speed:0,start:center()-offset/step(),drag:false};track.style.transition='none';track.style.transform='translateX('+offset+'px)'};
     viewport.onpointermove=event=>{if(!gesture||gesture.id!==event.pointerId)return;const dt=event.timeStamp-gesture.time;
         if(dt>0)gesture.speed=dt>90?0:.3*gesture.speed+.7*(pickerAxis(event)-gesture.lastX)/dt;
@@ -843,6 +842,11 @@ sheet.textContent+=`
 .uses-camera-glass .phone footer #panel.material-ready:not([hidden]),.uses-camera-glass .phone footer .bottom-selector.material-ready:not([hidden]){
     background-color:transparent
 }
+@media(prefers-reduced-motion:no-preference){
+    .uses-camera-glass .phone footer #panel.material-ready:not([hidden],.retracting),.uses-camera-glass .phone footer .bottom-selector.material-ready:not([hidden],.retracting){
+        transition:background-color 110ms ease-out
+    }
+}
 @media(prefers-reduced-transparency:reduce){
     .phone footer #panel:not([hidden]),.phone footer .bottom-selector:not([hidden]),.format-sheet[open]{
         background:#2c2c2e!important;-webkit-backdrop-filter:none!important;backdrop-filter:none!important
@@ -1054,6 +1058,7 @@ sheet.textContent+=`html,body,.phone,.phone>.stage{background:transparent!import
 hasPicture=true;get('live').hidden=true;
 const recipe=()=>({look:get('look').value,ev:usesDeviceBias()?0:exposureValue(),aspect,strength:Number(get('strength').value)/100});let lastRecipe='',lastFrame='',lastRail=false,railVersion=0,railEdge=0;
 let railSource=null,railPageActive=true,requestedBrand='',requestedRailLooks=[];
+const railWindows=new Set();
 let previousAspect='4:3',previousRaw=false,lastNight='',lastSavedID=null;
 // Measure the destination independently of the animated guide. The native layer
 // receives one rectangle per selection, including when a transition is interrupted.
@@ -1191,7 +1196,7 @@ updateNativeRail=()=>{
         ?JSON.stringify([state.inputRevision,state.zoom,state.mode48]):null;
     const changed=source!==railSource;
     if(changed){
-        railSource=source;cachedRailAtlases.clear();
+        railSource=source;cachedRailTiles.clear();
         selector.querySelector('.rail-track')?.setAttribute('aria-busy','true');
         for(const canvas of selector.querySelectorAll('canvas[data-look]'))delete canvas.dataset.ready
     }
@@ -1207,8 +1212,9 @@ updateNativeRail=()=>{
     const looks=options.slice(Math.max(0,center-2),center+3);
     const sessionChanged=brand!==requestedBrand||edge!==railEdge||(open&&changed);
     if(sessionChanged||looks.length!==requestedRailLooks.length||looks.some((look,i)=>look!==requestedRailLooks[i])){
-        if(sessionChanged)railVersion++;
+        if(sessionChanged){railVersion++;railWindows.clear()}
         requestedBrand=brand;requestedRailLooks=looks;lastRail=open;railEdge=edge;
+        if(open)railWindows.add(looks.join('|'));
         send('rail',{open,edge,looks,version:railVersion})
     }
 };
@@ -1433,7 +1439,7 @@ window.receiveCamera=state=>{
 };
 window.receiveCamera(waiting);
 window.receiveThumbs=async(atlas,looks,version=railVersion)=>{
-    const current=()=>lastRail&&version===railVersion&&Array.isArray(looks)&&looks.length===requestedRailLooks.length&&looks.every((look,i)=>look===requestedRailLooks[i]);
+    const current=()=>lastRail&&version===railVersion&&Array.isArray(looks)&&railWindows.has(looks.join('|'))&&looks.some(look=>requestedRailLooks.includes(look));
     if(!current())return;
     const image=new Image();
     image.src='data:image/jpeg;base64,'+atlas;
@@ -1446,7 +1452,7 @@ window.receiveThumbs=async(atlas,looks,version=railVersion)=>{
     const track=selector.querySelector('.rail-track');
     if(!track)return;
     track.setAttribute('data-fade-in','');
-    if(paintRailAtlas(track,image,looks))cachedRailAtlases.set(requestedBrand,{image,looks,time:performance.now()})
+    paintRailAtlas(track,image,looks,requestedBrand)
 };
 sync();send('ready');
 })();

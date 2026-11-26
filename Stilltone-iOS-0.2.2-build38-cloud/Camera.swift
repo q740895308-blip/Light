@@ -191,8 +191,10 @@ struct PreviewFraming {
     }
     init?(buffer: CVPixelBuffer, target: CGSize) {
         let encoded = CGRect(x:0, y:0, width:CVPixelBufferGetWidth(buffer), height:CVPixelBufferGetHeight(buffer))
-        let clean = CVImageBufferGetCleanRect(buffer).intersection(encoded)
-        self.init(clean:clean, display:CVImageBufferGetDisplaySize(buffer), target:target)
+        let aperture = CVImageBufferGetCleanRect(buffer).intersection(encoded)
+        let clean = aperture.isEmpty ? encoded : aperture
+        let display = CVImageBufferGetDisplaySize(buffer)
+        self.init(clean:clean, display:display.width > 0 && display.height > 0 ? display : clean.size, target:target)
     }
     func frame(_ image: CIImage) -> CIImage {
         image.cropped(to:crop)
@@ -753,7 +755,6 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
         guard session.canAddOutput(photos) else { session.removeInput(newInput); report("无法启动照片输出。"); return }; session.addOutput(photos)
         guard session.canAddOutput(video) else { session.removeInput(newInput); session.removeOutput(photos); report("无法启动取景。"); return }
         video.alwaysDiscardsLateVideoFrames = true
-        video.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
         session.addOutput(video); video.setSampleBufferDelegate(self, queue: frames)
         photos.maxPhotoQualityPrioritization = .quality
         input = newInput; preparePhotoFormat(newInput.device); orient()
@@ -845,6 +846,18 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
         }
     }
     private func orient() {
+        // Core Image samples camera Y'CbCr buffers directly in the GPU render pass.
+        if let format = input?.device.activeFormat.formatDescription {
+            let available = video.availableVideoPixelFormatTypes
+            let native = CMFormatDescriptionGetMediaSubType(format)
+            let planar = [kCVPixelFormatType_420YpCbCr8BiPlanarFullRange, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange]
+            let type = planar.contains(native) && available.contains(native) ? native : planar.first(where:available.contains)
+            if let type = type ?? (available.contains(kCVPixelFormatType_32BGRA) ? kCVPixelFormatType_32BGRA : nil) {
+                video.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String:type]
+            } else {
+                video.videoSettings = nil
+            }
+        }
         if #available(iOS 17.0, *), let device = input?.device {
             rotationCoordinator = AVCaptureDevice.RotationCoordinator(device:device,previewLayer:nil)
         }

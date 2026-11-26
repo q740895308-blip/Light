@@ -4,7 +4,7 @@ const fs = require('node:fs'), path = require('node:path'), vm = require('node:v
 const html = fs.readFileSync(path.join(__dirname, '..', 'FL-Camera-Review.html'), 'utf8');
 const start = html.indexOf('window.receiveThumbs=async('), end = html.indexOf('\nsync();send(', start);
 assert.ok(start >= 0 && end > start, 'find the packaged receiver');
-const paintStart=html.indexOf('const cachedRailAtlases='), paintEnd=html.indexOf('function filterRail(',paintStart);
+const paintStart=html.indexOf('const cachedRailTiles='), paintEnd=html.indexOf('function filterRail(',paintStart);
 assert.ok(paintStart>=0&&paintEnd>paintStart,'find the packaged atlas painter');
 const names = ['original','HABL1','HABL2','HACI1','HACI2','HAFM2','HSST2','HSST3'];
 const windowLooks=names.slice(1,6);
@@ -14,7 +14,7 @@ const canvases = names.map((look) => ({ dataset:{ look }, width:96, height:96,
   getContext: () => ({ drawImage: (_image, ...args) => calls.push([look, ...args]) }) }));
 const track={querySelectorAll:()=>canvases,setAttribute:()=>{}};
 const env = vm.createContext({ window:{}, railVersion:1, lastRail:true, requestedBrand:'hasselblad', selector:{querySelector:()=>track},performance,
-  requestedRailLooks:windowLooks,
+  requestedRailLooks:windowLooks,railWindows:new Set([windowLooks.join('|')]),
   Image:class { naturalHeight=edge; naturalWidth=edge*windowLooks.length; decode() { return decode(); } },
   setTimeout:(fn, ms) => { assert.equal(ms, 600); timers.set(++timerID, fn); return timerID; },
   clearTimeout:(id) => timers.delete(id) });
