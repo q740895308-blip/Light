@@ -113,6 +113,11 @@ const {chromium,webkit}=require('playwright-core');
                 const buttons=[get('shutter'),tools.querySelector('[aria-pressed=true]'),get('toggle'),document.querySelector('.macro-control')];
                 return buttons.map(b=>{
                     const {x,y,width,height}=b.getBoundingClientRect();
+                    for(let el=b;el&&el!==footer;el=el.parentElement){
+                        const style=getComputedStyle(el);
+                        if(style.opacity!=='1'||style.visibility!=='visible'||style.display==='none')throw Error('camera control faded or hidden: '+el.className);
+                        if(el.getAnimations().some(a=>a.effect.getKeyframes().some(k=>'opacity' in k)))throw Error('opacity animation on camera control');
+                    }
                     return {rect:[x,y,width,height],hit:b.contains(document.elementFromPoint(x+width/2,y+height/2))}
                 })
             });
@@ -120,23 +125,31 @@ const {chromium,webkit}=require('playwright-core');
             await page.evaluate(()=>Promise.all(tools.getAnimations().map(a=>a.finished)));
             const home=await controlsUnderSheet();assert.ok(home.every(b=>b.hit&&b.rect[2]>0));
             for(const [shortcut,panelId] of [['#toggle','#panel'],['#filters','.bottom-selector']]){
-                await page.locator(shortcut).tap();
-                await page.waitForFunction(()=>shootRow.inert&&Number(getComputedStyle(shootRow).opacity)===0);
-                const covered=await controlsUnderSheet();
-                assert.deepEqual(covered.map(b=>b.rect),home.map(b=>b.rect));
-                assert.ok(covered.every(b=>!b.hit),'covered camera controls do not receive touch');
-                const sample=await page.evaluate(id=>{
-                    foldControls(document.querySelector(id));
-                    const panelAnimation=sheetMotion;panelAnimation.pause();
-                    panelAnimation.currentTime=panelAnimation.effect.getTiming().duration/2;
-                    const reveal=shootRow.getAnimations().find(a=>a.effect.getKeyframes().some(k=>'opacity' in k));
-                    if(!reveal)throw Error('missing progressive reveal');
-                    reveal.pause();reveal.currentTime=reveal.effect.getTiming().duration/2;
-                    return [Number(getComputedStyle(shootRow).opacity),shootRow.inert]
-                },panelId);
-                assert.ok(sample[0]>0&&sample[0]<1&&sample[1]);
-                const during=await controlsUnderSheet();assert.deepEqual(during,covered);
-                await page.evaluate(()=>{shootRow.getAnimations().forEach(a=>a.finish());sheetMotion.finish()});
+                const assertCovered=async()=>{
+                    const controls=await controlsUnderSheet();
+                    assert.deepEqual(controls.map(b=>b.rect),home.map(b=>b.rect));
+                    assert.ok(controls.every(b=>!b.hit),'open sheet blocks touch on all four underlying controls');
+                    assert.ok(await page.evaluate(id=>{
+                        const panel=getComputedStyle(document.querySelector(id));
+                        return shootRow.inert&&panel.opacity==='1'&&Number(panel.zIndex)>Number(getComputedStyle(shootRow).zIndex)
+                    },panelId),'panel stays opaque ahead of the inert camera controls');
+                };
+                for(const opening of [true,false]){
+                    await page.evaluate(({opening,shortcut,panelId})=>{
+                        const panel=document.querySelector(panelId);
+                        if(opening)document.querySelector(shortcut).click();else foldControls(panel);
+                        const motion=panel.getAnimations()[0];motion.pause();motion.currentTime=0
+                    },{opening,shortcut,panelId});
+                    for(const progress of [0,.5,.99]){
+                        await page.evaluate(({id,progress})=>{
+                            const motion=document.querySelector(id).getAnimations()[0];
+                            motion.currentTime=motion.effect.getTiming().duration*progress
+                        },{id:panelId,progress});
+                        await assertCovered()
+                    }
+                    await page.evaluate(id=>document.querySelector(id).getAnimations()[0].finish(),panelId);
+                    if(opening)await assertCovered()
+                }
                 await page.locator(panelId).waitFor({state:'hidden'});assert.deepEqual(await controlsUnderSheet(),home);
             }
             await page.evaluate(()=>{aspect='4:3';syncFrame();refresh()});
@@ -254,7 +267,7 @@ const {chromium,webkit}=require('playwright-core');
             await page.evaluate(()=>leavePicker());await page.locator('#filters').tap();
             await page.evaluate(()=>Promise.all(shootRow.getAnimations().map(a=>a.finished)));
             assert.deepEqual(await controlBoxes(),baseline,'filter controls match original 4:3');
-            assert.equal(await page.evaluate(()=>shootRow.inert&&Number(getComputedStyle(shootRow).opacity)===0),true);
+            assert.equal(await page.evaluate(()=>shootRow.inert&&Number(getComputedStyle(shootRow).opacity)===1),true);
             const filterBox=await panel.boundingBox();assert.ok(filterBox.y+filterBox.height>height-48);
             const railInfo=await page.evaluate(()=>{
                 const tile=document.querySelector('.rail-track canvas'),request=posts.filter(p=>p.type==='rail').at(-1);
