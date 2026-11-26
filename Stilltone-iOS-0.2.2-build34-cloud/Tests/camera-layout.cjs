@@ -182,10 +182,7 @@ const {verifyMenuDismissal}=require('./menu-dismissal.cjs');
                 const results=[];
                 for(const [slot,name] of [[0,''],[2,'宽高比']]){
                     modeStrip.classList.add('sliding');setMode(slot);
-                    const strip=modeStrip.getBoundingClientRect(),pill=getComputedStyle(modeStrip,'::before');
-                    const matrix=new DOMMatrixReadOnly(pill.transform);
-                    const target={x:strip.x+modeStrip.clientLeft+parseFloat(pill.left)+matrix.m41,
-                        y:strip.y+modeStrip.clientTop+parseFloat(pill.top)+matrix.m42,width:parseFloat(pill.width),height:parseFloat(pill.height)};
+                    const target=window.renderedModeCapsule();
                     modeStrip.classList.remove('sliding');
                     if(name)chooseBottom(name,true);else controlsButton.onclick();
                     const panel=name?selector:drawer;
@@ -196,16 +193,23 @@ const {verifyMenuDismissal}=require('./menu-dismissal.cjs');
                     close.finish();
                     await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
                     const pulse=modeButtons[slot].getAnimations().find(a=>a.animationName==='capsule-label-rebound');
+                    const targetStyle=getComputedStyle(modeStrip,'::before');
+                    if(targetStyle.animationName!=='capsule-rebound')throw Error('missing visible capsule rebound');
+                    const duration=parseFloat(targetStyle.animationDuration)*1000;
                     const probe=document.createElement('style');document.head.append(probe);
-                    let minX=1,maxX=1,minY=1,maxY=1;
-                    for(const fraction of [.12,.19,.24,.45,.51,.59,.7]){
-                        const duration=parseFloat(getComputedStyle(modeStrip,'::before').animationDuration)*1000;
-                        probe.textContent='.native-camera .mode.dock-rebound[role=group]::before{animation-play-state:paused!important;animation-delay:-'+duration*fraction+'ms!important}';
-                        const m=new DOMMatrixReadOnly(getComputedStyle(modeStrip,'::before').transform);
-                        minX=Math.min(minX,m.a);maxX=Math.max(maxX,m.a);minY=Math.min(minY,m.d);maxY=Math.max(maxY,m.d)
-                    }
+                    const selector='.native-camera .mode.dock-rebound[role=group]::before';
+                    const frames=[.19,.51,.79,1].map(fraction=>{
+                        // Restart paused so time spent rendering earlier frames never enters the sample.
+                        probe.textContent=selector+'{animation-name:none!important}';
+                        if(getComputedStyle(modeStrip,'::before').animationName!=='none')throw Error('capsule clock did not reset');
+                        probe.textContent=selector+'{animation-play-state:paused!important;animation-delay:-'+duration*fraction+'ms!important}';
+                        const matrix=new DOMMatrixReadOnly(getComputedStyle(modeStrip,'::before').transform);
+                        return [matrix.a,matrix.d]
+                    });
                     probe.remove();
-                    if(!(minX<.97&&maxX>1.06&&minY<.92&&maxY>1.05))throw Error('weak capsule rebound '+[minX,maxX,minY,maxY]);
+                    const [[wide,flat],[narrow,tall],[dampedX,dampedY],[restX,restY]]=frames;
+                    if(!(wide>1.06&&flat<.92&&narrow<.97&&tall>1.05&&dampedX>1&&dampedX<wide&&dampedY<1&&dampedY>flat&&Math.abs(restX-1)<.001&&Math.abs(restY-1)<.001))
+                        throw Error('unexpected capsule rebound keyframes '+JSON.stringify(frames));
                     results.push([edgeError,modeStrip.classList.contains('dock-rebound'),pulse?.effect.getTiming().iterations]);
                     if(!pulse)break;
                     pulse.finish();await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
@@ -226,7 +230,7 @@ const {verifyMenuDismissal}=require('./menu-dismissal.cjs');
                     if(getComputedStyle(modeButtons[1].firstElementChild).webkitTextFillColor!=='rgb(255, 214, 10)')throw Error('photo label lost its yellow fill');
                     if(getComputedStyle(tools).visibility!=='visible'||!shootRow.inert)throw Error('underlying row removed or interactive')
                 }
-                const box=drawer.getBoundingClientRect(),target=modeButtons[1].getBoundingClientRect();
+                const box=drawer.getBoundingClientRect(),target=window.renderedModeCapsule();
                 const distance=Math.hypot(box.x+box.width/2-target.x-target.width/2,box.y+box.height/2-target.y-target.height/2);
                 stopSheetMotion();return distance
             });assert.ok(closing<2,'menu close target: '+closing);
@@ -296,7 +300,7 @@ const {verifyMenuDismissal}=require('./menu-dismissal.cjs');
                             motion.currentTime=motion.effect.getTiming().duration*progress;
                         }
                         motion.currentTime=motion.effect.getTiming().duration;
-                        const end=selector.getBoundingClientRect(),photo=modeButtons[1].getBoundingClientRect();
+                        const end=selector.getBoundingClientRect(),photo=window.renderedModeCapsule();
                         const matches=['x','y','width','height'].every(k=>Math.abs(end[k]-photo[k])<1);
                         motion.currentTime=time;
                         window.closeSample=[footer.classList.contains('settling-home'),getComputedStyle(shootRow).getPropertyValue('--control-lift').trim(),matches];

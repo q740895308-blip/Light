@@ -3,7 +3,16 @@ const assert=require('node:assert/strict');
 async function verifyMenuDismissal(page){
     const drawer=page.locator('#panel'), picker=page.locator('.bottom-selector');
     const toggle=page.locator('#toggle');
-    await page.evaluate(()=>window.receiveCamera({...window.nativeCameraState,autoFlash:true}));
+    await page.evaluate(()=>{
+        window.receiveCamera({...window.nativeCameraState,autoFlash:true});
+        window.renderedModeCapsule=()=>{
+            const strip=modeStrip.getBoundingClientRect(),pill=getComputedStyle(modeStrip,'::before');
+            const transform=new DOMMatrixReadOnly(pill.transform);
+            return {x:strip.x+modeStrip.clientLeft+parseFloat(pill.left)+transform.m41,
+                y:strip.y+modeStrip.clientTop+parseFloat(pill.top)+transform.m42,
+                width:parseFloat(pill.width),height:parseFloat(pill.height)}
+        }
+    });
 
     async function open(name){
         await toggle.tap();
@@ -42,11 +51,7 @@ async function verifyMenuDismissal(page){
                     samples.push({progress,opacity:style.opacity,visibility:style.visibility,background:style.backgroundColor,
                         visible:visible?.tagName||null,box:box.toJSON(),radii});
                 }
-                const strip=modeStrip.getBoundingClientRect(), cap=getComputedStyle(modeStrip,'::before');
-                const matrix=new DOMMatrixReadOnly(cap.transform);
-                const target={x:strip.x+modeStrip.clientLeft+parseFloat(cap.left)+matrix.m41,
-                    y:strip.y+modeStrip.clientTop+parseFloat(cap.top)+matrix.m42,width:parseFloat(cap.width),height:parseFloat(cap.height)};
-                window.menuSample={samples,target};
+                window.menuSample={samples,target:window.renderedModeCapsule()};
                 motion.finish()
             }
         });
