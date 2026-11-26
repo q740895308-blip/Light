@@ -1,0 +1,39 @@
+name: Build iPhone IPA
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify shared pages, controls and native resources
+        run: |
+          python3 Tests/verify_bundle.py
+          node Tests/camera-ui.test.cjs
+          node Tests/build17.test.cjs
+          node Tests/build18.test.cjs
+          node Tests/thumbnail-receiver.cjs
+      - name: Compile for iPhone and package unsigned IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -project FL-Camera.xcodeproj -target FLCamera -configuration Release -sdk iphoneos ARCHS=arm64 ONLY_ACTIVE_ARCH=NO CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$RUNNER_TEMP/device" build
+          app="$RUNNER_TEMP/device/FLCamera.app"
+          executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Info.plist")
+          xcrun lipo "$app/$executable" -verify_arch arm64
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Info.plist")" = 0.2.2
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Info.plist")" = 28
+          cmp Stilltone-Album.html "$app/Stilltone-Album.html"
+          cmp FL-Camera-Review.html "$app/FL-Camera-Review.html"
+          for lut in FL2 FL3 GR-Positive Classic-Negative Nostalgic-Negative Classic-Chrome; do test -s "$app/$lut.rgba"; done
+          mkdir -p "$RUNNER_TEMP/package/Payload"
+          ditto "$app" "$RUNNER_TEMP/package/Payload/FLCamera.app"
+          cd "$RUNNER_TEMP/package"
+          /usr/bin/zip -qry "$GITHUB_WORKSPACE/FLCamera-unsigned.ipa" Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Stilltone-0.2.2-build28-unsigned
+          path: FLCamera-unsigned.ipa
+          if-no-files-found: error
