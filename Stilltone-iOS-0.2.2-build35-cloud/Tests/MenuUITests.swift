@@ -25,7 +25,11 @@ final class MenuUITests: XCTestCase {
         }
         drag(19)
         XCTAssertTrue(grip.exists, "A short drag must leave the sheet open")
-        XCTAssertEqual(grip.frame.midY, original.midY, accuracy: 1)
+        let settled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            grip.exists && abs(grip.frame.midY - original.midY) <= 1
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [settled], timeout: 4), .completed,
+                       "A short pull must spring back to the original handle position")
         func attach(_ name: String) {
             let image = XCTAttachment(screenshot: app.screenshot())
             image.name = name
