@@ -107,9 +107,10 @@ async function verifyFilterFirstFrame(page) {
     const resumed=await version();assert.notEqual(resumed,foreground);
     await deliver(0,foreground);waiting(await view(),'previous foreground delivery');
     await deliver(0,resumed);showing(await afterFade(),first,'new foreground capture');
-    await page.evaluate(()=>get('album').click());
+    await dismiss();await closed();await page.locator('#album').tap();
+    assert.equal(await page.evaluate(()=>window.posts.filter(p=>p.type==='album').length),1);
     await setState({ready:false});await setState({ready:true});
-    waiting(await view(),'native album dismissal');
+    waiting(await open(),'native album dismissal');
     const afterAlbum=await version();assert.notEqual(afterAlbum,resumed);
     await deliver(1,resumed);waiting(await view(),'previous album delivery');
     await deliver(1,afterAlbum);showing(await afterFade(),second,'capture after album dismissal');
