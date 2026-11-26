@@ -49,6 +49,20 @@ test('cold start: no capability claims or hardware commands',()=>{
     eq(t.run('formatShortcut.textContent'),'…');eq(t.run('formatTile.firstElementChild.textContent'),'…');
     t.run("reviewZoom(2);glideZoom(2);get('flip').onclick()");eq(last(t,'zoom'),undefined);eq(last(t,'flip'),undefined);
 });
+test('lens press centers and highlights before release; stale ramps and drags do not commit earlier choices',()=>{
+    const t=ready({lenses:[.5,1,2,3],zoom:1});
+    const enter=(value,id)=>{const b=lens(t,value);b.onpointerdown({button:0,pointerId:id,clientX:40,clientY:44});return b};
+    const release=(button,id)=>{button.onpointerup({pointerId:id,clientX:40,clientY:44});button.onclick({detail:1})};
+    const selected=()=>Number([...t.run('tools').querySelectorAll('[data-step]')].find(b=>b.getAttribute('aria-pressed')==='true')?.dataset.step);
+    const three=enter(3,1);
+    eq(selected(),3);eq(t.run("tools.style['--active-slot']"),'3');eq(last(t,'zoom'),undefined);
+    release(three,1);release(enter(2,2),2);
+    t.report(state({lenses:[.5,1,2,3],zoom:3,zoomSettling:false}));
+    eq(selected(),2);eq(t.messages.filter(m=>m.type==='zoom').map(m=>m.value),[3,2]);
+    const half=enter(.5,3);
+    half.onpointermove({pointerId:3,clientX:65,clientY:44});release(half,3);
+    eq(selected(),2);eq(t.messages.filter(m=>m.type==='zoom').length,2);
+});
 test('native report, not tools click/bubbling or requested zoom, owns MP',()=>{
     const t=ready({sizes:[8],zoom:2});badge(t,'HEIF',8);lens(t,1).click();eq(last(t,'zoom'),{type:'zoom',value:1});
     badge(t,'HEIF',8);shot(t,{mp:8,codec:'HEIF'});t.open('格式');eq(labels(t.row('分辨率')),['8MP']);

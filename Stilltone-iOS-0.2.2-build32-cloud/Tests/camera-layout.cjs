@@ -131,7 +131,8 @@ const {chromium,webkit}=require('playwright-core');
                     assert.ok(controls.every(b=>!b.hit),'open sheet blocks touch on all four underlying controls');
                     assert.ok(await page.evaluate(id=>{
                         const panel=getComputedStyle(document.querySelector(id));
-                        return shootRow.inert&&panel.opacity==='1'&&Number(panel.zIndex)>Number(getComputedStyle(shootRow).zIndex)
+                        const background=id==='#panel'?'rgb(44, 44, 46)':'rgb(34, 34, 36)';
+                        return shootRow.inert&&panel.opacity==='1'&&panel.backgroundColor===background&&Number(panel.zIndex)>Number(getComputedStyle(shootRow).zIndex)
                     },panelId),'panel stays opaque ahead of the inert camera controls');
                 };
                 for(const opening of [true,false]){
@@ -152,6 +153,44 @@ const {chromium,webkit}=require('playwright-core');
                 }
                 await page.locator(panelId).waitFor({state:'hidden'});assert.deepEqual(await controlsUnderSheet(),home);
             }
+            const jumps=await page.evaluate(()=>{
+                function reversedDelta(panel,open,reopen,target){
+                    open();panel.getAnimations().forEach(a=>a.finish());foldControls(panel);
+                    sheetMotion.pause();sheetMotion.currentTime=sheetMotion.effect.getTiming().duration*.7;
+                    const before=panel.getBoundingClientRect();
+                    reopen();
+                    const opening=target.getAnimations()[0];opening.pause();opening.currentTime=0;
+                    const after=target.getBoundingClientRect();
+                    stopSheetMotion();leavePicker();
+                    return Math.max(...['x','y','width','height'].map(k=>Math.abs(after[k]-before[k])))
+                }
+                return [
+                    reversedDelta(drawer,()=>controlsButton.onclick(),()=>controlsButton.onclick(),drawer),
+                    reversedDelta(selector,()=>chooseBottom('滤镜',true),()=>toggleShortcut('格式'),selector)
+                ]
+            });
+            assert.ok(jumps.every(n=>n<1),'interrupted panel changed bounds on its first frame: '+jumps);
+            const dock=await page.evaluate(async()=>{
+                const results=[];
+                for(const [slot,name] of [[0,''],[2,'宽高比']]){
+                    setMode(slot);
+                    if(name)chooseBottom(name,true);else controlsButton.onclick();
+                    const panel=name?selector:drawer;
+                    panel.getAnimations().forEach(a=>a.finish());foldControls(panel);
+                    const close=sheetMotion;close.pause();close.currentTime=close.effect.getTiming().duration;
+                    const end=panel.getBoundingClientRect(),target=modeButtons[slot].getBoundingClientRect();
+                    const edgeError=Math.max(...['x','y','width','height'].map(k=>Math.abs(end[k]-target[k])));
+                    close.finish();
+                    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+                    const pulse=modeButtons[slot].getAnimations().find(a=>a.animationName==='capsule-label-rebound');
+                    results.push([edgeError,modeStrip.classList.contains('dock-rebound'),pulse?.effect.getTiming().iterations]);
+                    if(!pulse)break;
+                    pulse.finish();await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+                    if(modeStrip.classList.contains('dock-rebound'))throw Error('capsule rebound did not settle');
+                }
+                setMode(1);return results
+            });
+            assert.ok(dock.length===2&&dock.every(([error,pulse,iterations])=>error<1&&pulse&&iterations===1),'capsule dock '+JSON.stringify(dock));
             await page.evaluate(()=>{aspect='4:3';syncFrame();refresh()});
             await page.evaluate(()=>Promise.all(tools.getAnimations().map(a=>a.finished)));
             await page.evaluate(()=>Promise.all(tools.getAnimations().map(a=>a.finished)));const baseline=await controlBoxes();await page.locator('#toggle').tap();const grip=page.locator('.drawer-grip');await grip.waitFor();

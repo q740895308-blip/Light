@@ -85,6 +85,9 @@ function controlLabel(button,value){
 }
 const modeButtons=modeNames.map((label,index)=>{const button=document.createElement('button');controlLabel(button,label);button.onclick=()=>setMode(index);modeStrip.append(button);return button});
 let selectedMode=1,modeDrag=null;
+modeStrip.addEventListener('animationend',event=>{
+    if(event.animationName==='capsule-label-rebound')modeStrip.classList.remove('dock-rebound')
+});
 function setMode(index){if(index!==selectedMode)cancelTimer();selectedMode=index;modeStrip.style.setProperty('--slot',index);modeButtons.forEach((button,position)=>button.setAttribute('aria-pressed',String(position===index)))}
 function modePosition(event){const rect=modeStrip.getBoundingClientRect();return Math.max(0,Math.min(2,(event.clientX-rect.left-4)/(rect.width-8)*3-.5))}
 modeStrip.onpointerdown=event=>{if(!event.isPrimary||event.button!==0)return;modeDrag=event.pointerId;modeStrip.classList.add('sliding');modeStrip.setPointerCapture(modeDrag);modeStrip.style.setProperty('--slot',modePosition(event))};
@@ -173,10 +176,11 @@ function setControlRotation(value){
     if(!selector.hidden&&alignFilterRail)alignFilterRail()
 }
 function toggleShortcut(kind){if(folding&&cameraBridge&&sheetMotion){
-        const same=!selector.hidden&&activeSelector===kind,from=same?selector.getBoundingClientRect():null;
-        const opacity=same?Number(getComputedStyle(selector).opacity):1;
-        stopSheetMotion();drawer.style.transform='';selector.style.transform='';
-        if(same){animatePanelChange(selector,from,opacity);return}
+        if(!selector.hidden&&activeSelector===kind){
+            const from=selector.getBoundingClientRect(),opacity=Number(getComputedStyle(selector).opacity);
+            stopSheetMotion();selector.style.transform='';animatePanelChange(selector,from,opacity);return
+        }
+        chooseBottom(kind,true);return
     }else if(folding)return;
     if(!selector.hidden&&activeSelector===kind){foldControls(selector);return}chooseBottom(kind,true)}
 let handoffMotion=null;
@@ -202,6 +206,7 @@ function returnToDrawer(){
 function chooseBottom(kind,shortcut=false){
     const fromDrawer=!drawer.hidden,sourcePanel=fromDrawer?drawer:selector;
     const startBox=!sourcePanel.hidden?sourcePanel.getBoundingClientRect():null;
+    const openingOpacity=startBox&&kind!=='滤镜'?Number(getComputedStyle(sourcePanel).opacity):1;
     const startHeight=fromDrawer?drawer.offsetHeight:shortcut&&!selector.hidden?selector.getBoundingClientRect().height:0;
     if(cameraBridge){stopSheetMotion();drawer.style.transform='';selector.style.transform=''}
     selector.getAnimations().forEach(animation=>animation.cancel());
@@ -209,7 +214,7 @@ function chooseBottom(kind,shortcut=false){
     if(cameraBridge)shootRow.inert=kind==='滤镜';
     if(cameraBridge)footer.style.setProperty('--menu-height',selector.offsetHeight+'px');
     if(cameraBridge&&!matchMedia('(prefers-reduced-motion: reduce)').matches&&selector.animate){
-        animatePanelChange(selector,startBox);
+        animatePanelChange(selector,startBox,openingOpacity);
 
     }
     if(!cameraBridge&&startHeight&&!matchMedia('(prefers-reduced-motion: reduce)').matches){selector.animate([{height:startHeight+'px'},{height:selector.offsetHeight+'px'}],{duration:250,easing:'cubic-bezier(.2,.76,.23,1)'})}
@@ -414,6 +419,7 @@ function sheetPosition(panel){
     return transform&&transform!=='none'?(new DOMMatrixReadOnly(transform).m42||0):0
 }
 function stopSheetMotion(){
+    modeStrip.classList.remove('dock-rebound');
     footer.classList.remove('settling-home');
     handoffMotion?.cancel();handoffMotion=null;
     if(sheetMotion){sheetMotion.cancel();sheetMotion=null}
@@ -443,15 +449,19 @@ function foldControls(panel=drawer){
         stopSheetMotion();panel.style.transform='';
         if(!panel.animate||matchMedia('(prefers-reduced-motion: reduce)').matches){leavePicker();return}
         footer.classList.add('settling-home');
-        const base=panel.getBoundingClientRect(),end=modeButtons[1].getBoundingClientRect();
+        const base=panel.getBoundingClientRect(),target=modeButtons[selectedMode],end=target.getBoundingClientRect();
         if(!base.width||!base.height||!end.width||!end.height){leavePicker();return}
         const transform=box=>'translate('+(box.left-base.left)+'px,'+(box.top-base.top)+'px) scale('+box.width/base.width+','+box.height/base.height+')';
         const coversShutter=panel===drawer||activeSelector==='滤镜';
         const motion=panel.animate([{transformOrigin:'0 0',transform:transform(start),opacity:coversShutter?1:opacity},
             {transformOrigin:'0 0',transform:transform(end),opacity:coversShutter?1:0}],
-            {duration:440,easing:'cubic-bezier(.38,.02,.18,1)',fill:'both'});
+            {duration:440,easing:'cubic-bezier(.30,.10,.20,1)',fill:'both'});
         folding=true;sheetMotion=motion;
-        motion.onfinish=()=>{if(sheetMotion!==motion)return;sheetMotion=null;leavePicker();folding=false;motion.cancel()};
+        motion.onfinish=()=>{
+            if(sheetMotion!==motion)return;
+            sheetMotion=null;leavePicker();folding=false;motion.cancel();
+            if(target===modeButtons[selectedMode]&&!matchMedia('(prefers-reduced-motion: reduce)').matches)modeStrip.classList.add('dock-rebound')
+        };
         return
     }
     if(folding||panel.hidden)return;
@@ -460,7 +470,7 @@ function foldControls(panel=drawer){
     footer.classList.remove('selecting');
     const dismiss=()=>{if(formatSheet.open)formatSheet.close();leavePicker()};
     if(matchMedia('(prefers-reduced-motion: reduce)').matches){dismiss();return}
-    const box=panel.getBoundingClientRect(),target=modeButtons[1].getBoundingClientRect();
+    const box=panel.getBoundingClientRect(),target=modeButtons[selectedMode].getBoundingClientRect();
     const dx=target.left+target.width/2-box.left-box.width/2,dy=target.top+target.height/2-box.top-box.height/2;
     folding=true;panel.inert=true;panel.classList.add('retracting');
     const motion=panel.animate([{transform:offset,opacity:1},{transform:`translate(${dx*.84}px,${dy*.84}px) scale(.23)`,opacity:.82,offset:.68},{transform:`translate(${dx}px,${dy}px) scale(${target.width/box.width})`,opacity:0}],{duration:310,easing:'cubic-bezier(.32,.02,.18,1)',fill:'forwards'});
@@ -521,7 +531,9 @@ sheet.textContent+=`
 .phone #panel{position:absolute;z-index:6;bottom:6px;left:2%;width:96%;box-sizing:border-box}.drawer-done{display:block;margin:4px auto 0;color:#ffd60a}.bottom #toggle{border-radius:50%;background:#ffffff18;width:40px;height:40px;flex:none}.bottom{gap:3px}.bottom .mode{min-width:0}.bottom .mode span,.bottom .mode b{font-size:12px}.phone:has(#panel:not([hidden])) .capture-tools{visibility:hidden}
 .bottom-selector>.rail-window{display:block;overflow:hidden;padding:0;touch-action:pan-y;user-select:none;cursor:grab}.rail-window:active{cursor:grabbing}.rail-track{display:flex;width:100%;will-change:transform}.rail-window .rail-track button{box-sizing:border-box;flex:0 0 31.25%;min-width:0;padding:5px 4px;transition:background-color .18s,border-color .18s}.rail-track button[aria-pressed=true]{background:#ffd60a0c}.gallery [open]{border-radius:12px;padding:8px}.format-sheet::backdrop,.gallery::backdrop{background:#0006}#panel:not([hidden]),.bottom-selector:not([hidden]),dialog[open]{animation:glass-in .21s ease-out}@keyframes glass-in{from{opacity:.25;translate:0 10px}to{opacity:1;translate:0 0}}@media(prefers-reduced-motion:reduce){#panel:not([hidden]),.bottom-selector:not([hidden]),dialog[open]{animation:none}}`;
 
-sheet.textContent += `.phone .bottom .mode button{font-size:15px}`;
+sheet.textContent += `.phone .bottom .mode button{font-size:15px}
+.phone .bottom .mode button>.control-label{font-size:inherit}
+.phone .bottom .mode button[aria-pressed=true]>.control-label{color:inherit}`;
 
 sheet.textContent+=`@media(orientation:landscape){.phone:has(.stage[data-pose="landscape"]){width:100vw;height:100dvh;max-width:none;aspect-ratio:auto}.phone>.stage[data-pose="landscape"]{top:50%;left:50%;translate:-50% -50%;width:min(100%,calc(100dvh * var(--frame)));height:auto}.phone:has(.stage[data-pose="landscape"]){container-type:size}.phone:has(.stage[data-pose="landscape"])>footer{width:min(44dvh,240px);left:auto;right:0;bottom:0;height:100%;justify-content:center;container-type:inline-size}}`;
 
@@ -634,6 +646,18 @@ body.native-camera .phone{width:100%;height:100dvh;min-width:0;max-width:none;ma
 .native-camera .phone button:focus:not(:focus-visible){outline:none}
 .native-camera .control-label,.native-camera #panel .tilegrid button>span{display:inline-block}
 .native-camera .phone{--control-angle:0deg}
+@media(prefers-reduced-motion:no-preference){
+    .native-camera .mode.dock-rebound[role=group]::before{animation:capsule-rebound 260ms both}
+    .native-camera .mode.dock-rebound button[aria-pressed=true]{animation:capsule-label-rebound 260ms both}
+    @keyframes capsule-rebound{
+        0%,100%{transform:translateX(calc(var(--slot,1)*100%)) scale(1)}
+        24%{transform:translateX(calc(var(--slot,1)*100%)) scale(.974,.95);animation-timing-function:ease-out}
+        59%{transform:translateX(calc(var(--slot,1)*100%)) scale(1.055,1.045);animation-timing-function:ease-in-out}
+    }
+    @keyframes capsule-label-rebound{
+        0%,100%{scale:1}24%{scale:.97;animation-timing-function:ease-out}59%{scale:1.045;animation-timing-function:ease-in-out}
+    }
+}
 .native-camera :is(.control-label,.top .icon svg,#flip svg,#toggle svg,#album svg,.macro-control .macro-glyph,#panel .tilegrid button>i,#panel .tilegrid button>span,.count,.meter-lock,#state){rotate:var(--control-angle,0deg)}
 .native-camera .phone #album.has-photo::after{content:'';position:absolute;inset:0;border-radius:inherit;background-image:inherit;background-position:center;background-size:cover;pointer-events:none;rotate:var(--control-angle,0deg)}
 .native-camera .macro-control[aria-pressed=false]::after{rotate:var(--control-angle,0deg)}
@@ -657,8 +681,8 @@ body.native-camera .phone{width:100%;height:100dvh;min-width:0;max-width:none;ma
     --control-lift:min(0px,calc(18.07dvh - var(--menu-height,180px) - var(--picker-bottom) - 10.15cqw - 16px))
 }
 .native-camera .phone footer.changing-resolution.selecting:has(.bottom-selector:not([data-picker="滤镜"])) .shootrow{transform:translateY(calc(var(--control-lift) - 10px))}
-.native-camera .phone footer #panel:not([hidden]){background-color:rgb(44,44,46)}
-.native-camera .phone footer.selecting .bottom-selector[data-picker="滤镜"]:not([hidden]){background-color:rgb(34,34,36)}
+.native-camera .phone footer #panel:not([hidden]){background:rgb(44,44,46);backdrop-filter:none;-webkit-backdrop-filter:none}
+.native-camera .phone footer.selecting .bottom-selector[data-picker="滤镜"]:not([hidden]){background:rgb(34,34,36);backdrop-filter:none;-webkit-backdrop-filter:none}
 .native-camera .phone footer:has(#panel:not([hidden])) .shootrow .capture-tools{visibility:inherit}
 .native-camera .phone #panel i[data-seconds]{position:relative}
 .native-camera .phone #panel i[data-seconds]:not([data-seconds=""])::after{content:attr(data-seconds);position:absolute;bottom:2px;font:600 10px/1 system-ui}
@@ -756,11 +780,14 @@ const menuSizeObserver=new ResizeObserver(()=>{
 menuSizeObserver.observe(drawer);menuSizeObserver.observe(selector);
 controlsButton.onclick=()=>{
     if(!drawer.hidden&&!folding){dragVelocity=0;foldControls();return}
-    const from=drawer.hidden?null:sheetPosition(drawer);stopSheetMotion();leavePicker();
+    const previous=drawer.hidden?selector:drawer;
+    const from=previous.hidden?null:previous.getBoundingClientRect();
+    stopSheetMotion();leavePicker();
     drawer.hidden=false;controlsButton.setAttribute('aria-expanded','true');
     shootRow.inert=true;
     footer.style.setProperty('--menu-height',drawer.offsetHeight+'px');
-    springSheet(drawer,from??Math.min(120,drawer.offsetHeight*.38),0,0)
+    if(from)animatePanelChange(drawer,from);
+    else springSheet(drawer,Math.min(120,drawer.offsetHeight*.38),0,0)
 };
 const send=(type,data={})=>cameraBridge.postMessage({type,...data});
 macroButton.onclick=()=>{
@@ -935,19 +962,56 @@ window.finishWide48=ok=>{
     window.receiveCamera(window.nativeCameraState);
     if(activeSelector==='格式')drawBottom()
 };
-let pendingLens=null,lensTimeout;
+let pendingLens=null,lensTimeout,lensPress=null;
 let pinchFrame=null,pinchTarget=null;
 function clearZoomInput(){
     if(pinchFrame!==null)cancelAnimationFrame(pinchFrame);
-    pinchFrame=null;pinchTarget=null;pendingLens=null;clearTimeout(lensTimeout);
+    pinchFrame=null;pinchTarget=null;pendingLens=null;lensPress=null;clearTimeout(lensTimeout);
     fingers.clear();pinchDistance=0
 }
 function placeLens(value){const index=window.nativeCameraState.lenses.indexOf(value);tools.style.setProperty('--active-slot',String(Math.max(0,index)))}
+function paintLens(){
+    const state=window.nativeCameraState;
+    const selected=lensPress?.value??pendingLens??state.lenses.filter(value=>value<=zoom+.001).at(-1);
+    const shownZoom=lensPress?.value??pendingLens??zoom;
+    placeLens(selected);
+    for(const button of tools.querySelectorAll('[data-step]')){
+        const value=Number(button.dataset.step),active=value===selected;
+        const label=Number((active?shownZoom:value).toFixed(2));
+        button.disabled=!hardwareReady(state);button.setAttribute('aria-pressed',String(active));
+        if(Array.isArray(state.opticalZoomStops))button.setAttribute('aria-label',Number(value.toFixed(2))+' 倍，'+(state.opticalZoomStops.includes(value)?'镜头倍率':'数码变焦'));
+        controlLabel(button,active?label+'×':value===.5?'.5':label)
+    }
+}
+function makeLensButton(value){
+    const button=document.createElement('button');
+    button.dataset.step=value;
+    button.onpointerdown=event=>{
+        if(event.isPrimary===false||event.button!==0||!hardwareReady())return;
+        lensPress={id:event.pointerId,value,x:event.clientX,y:event.clientY};
+        button.setPointerCapture(event.pointerId);paintLens()
+    };
+    const cancel=event=>{
+        if(lensPress?.id!==event.pointerId)return;
+        lensPress=null;paintLens()
+    };
+    const moved=event=>Math.hypot(event.clientX-lensPress.x,event.clientY-lensPress.y)>10;
+    button.onpointermove=event=>{if(lensPress?.id===event.pointerId&&moved(event))cancel(event)};
+    button.onpointercancel=button.onlostpointercapture=cancel;
+    button.onpointerup=event=>{
+        if(lensPress?.id!==event.pointerId)return;
+        if(moved(event)){cancel(event);return}
+        lensPress=null;glideZoom(value)
+    };
+    // Pointer taps commit on release; VoiceOver and keyboard dispatch a standalone click.
+    button.onclick=event=>{if(!event?.detail)glideZoom(value)};
+    return button
+}
 glideZoom=value=>{
     if(!hardwareReady()||!window.nativeCameraState.lenses.includes(value))return;
     if(pinchFrame!==null){cancelAnimationFrame(pinchFrame);pinchFrame=null;pinchTarget=null}
-    pendingLens=value;placeLens(value);clearTimeout(lensTimeout);
-    lensTimeout=setTimeout(()=>{pendingLens=null;placeLens(Math.max(...window.nativeCameraState.lenses.filter(z=>z<=zoom+.001)))},650);
+    pendingLens=value;paintLens();clearTimeout(lensTimeout);
+    lensTimeout=setTimeout(()=>{pendingLens=null;paintLens()},2200);
     send('zoom',{value,inputRevision:window.nativeCameraState.inputRevision})
 };
 function flushPinch(){
@@ -962,6 +1026,7 @@ function flushPinch(){
 }
 reviewZoom=value=>{
     if(!Number.isFinite(value)||!hardwareReady())return;
+    if(pendingLens!==null){pendingLens=null;clearTimeout(lensTimeout);paintLens()}
     pinchTarget=value;
     if(pinchFrame===null)flushPinch()
 };
@@ -1003,16 +1068,17 @@ window.receiveCamera=state=>{
     get('shutter').disabled=formatShortcut.disabled=formatTile.disabled=!usable;get('flip').disabled=!hardwareReady(state);
     if(!usable&&countdown!==null)cancelTimer();
     if(oldNight!==nightMode&&lastNight!==nightMode)sync();
-    if(JSON.stringify(prev.lenses)!==JSON.stringify(state.lenses)||!tools.dataset.native){tools.dataset.native='1';tools.querySelectorAll('[data-step]').forEach(button=>button.remove());for(const value of state.lenses){const button=document.createElement('button');button.dataset.step=value;button.onclick=()=>glideZoom(value);tools.append(button)}}
-    const step=zoom===null?undefined:Math.max(...state.lenses.filter(value=>value<=zoom+.001));
-    if(!hardwareReady(state)||!state.lenses.includes(pendingLens)||step===pendingLens){pendingLens=null;clearTimeout(lensTimeout)}
-    placeLens(pendingLens??step);
-    for(const button of tools.querySelectorAll('[data-step]')){
-        const value=Number(button.dataset.step),shown=Number((value===step?zoom:value).toFixed(2));
-        button.disabled=!hardwareReady(state);button.setAttribute('aria-pressed',String(value===step));
-        if(Array.isArray(state.opticalZoomStops))button.setAttribute('aria-label',value.toFixed(2).replace(/\.?0+$/,'')+' 倍，'+(state.opticalZoomStops.includes(value)?'镜头倍率':'数码变焦'));
-        controlLabel(button,value===step?shown+'×':value===.5?'.5':shown)
+    if(JSON.stringify(prev.lenses)!==JSON.stringify(state.lenses)||!tools.dataset.native){
+        lensPress=null;tools.dataset.native='1';tools.querySelectorAll('[data-step]').forEach(button=>button.remove());
+        for(const value of state.lenses)tools.append(makeLensButton(value))
     }
+    if(!hardwareReady(state))lensPress=null;
+    // Delayed native reports from the previous tap must not repaint the current target.
+    // Pinch/flip supersedes the target immediately; the timeout also recovers rejected taps.
+    if(!hardwareReady(state)||!state.lenses.includes(pendingLens)){
+        pendingLens=null;clearTimeout(lensTimeout)
+    }
+    paintLens();
     // Repaint only the open picker whose values/availability changed. Never rebuild a live filter drag.
     if(!selector.hidden&&activeSelector==='格式'&&(known!==reportedFormats(prev)||usable!==canUseCamera(prev)||JSON.stringify(prev.sizes)!==JSON.stringify(state.sizes)||JSON.stringify(prev.formats)!==JSON.stringify(state.formats)))drawBottom();
     if(!selector.hidden&&activeSelector==='夜间模式'&&(usable!==canUseCamera(prev)||oldNight!==nightMode||oldCodec!==previewCodec))drawBottom()

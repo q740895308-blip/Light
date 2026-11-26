@@ -41,6 +41,11 @@ async function checkDevice(browser,[width,height,top,right,bottom,left]) {
         await verifyHits('#shutter,#toggle,#album,#flip,.capture-tools button,.phone .top button');
         const format=await page.locator('.format-shortcut').boundingBox();
         assert.ok(format.width>=44&&format.height>=44);
+        const label=await page.locator('.mode button[aria-pressed=true]>.control-label').evaluate(element=>{
+            const style=getComputedStyle(element);
+            return [element.textContent,style.color,style.fontSize];
+        });
+        assert.deepEqual(label,['照片','rgb(255, 214, 10)','15px']);
         for(const aspect of ['4:3','16:9','1:1']){
             await page.evaluate(aspect=>{
                 chooseBottom('宽高比',true);
