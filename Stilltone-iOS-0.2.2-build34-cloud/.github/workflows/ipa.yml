@@ -1,0 +1,49 @@
+name: Build iPhone IPA
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify shared pages, controls and native resources
+        run: |
+          python3 Tests/verify_bundle.py
+          node Tests/camera-ui.test.cjs
+          node Tests/build17.test.cjs
+          node Tests/build18.test.cjs
+          node Tests/thumbnail-receiver.cjs
+          node Tests/capture-lifecycle.cjs
+          node Tests/photo-dimensions.cjs
+      - name: Verify touch layout in WebKit
+        run: |
+          npm install --prefix "$RUNNER_TEMP/ui-check" --no-audit --no-fund playwright-core@1.56.1
+          "$RUNNER_TEMP/ui-check/node_modules/.bin/playwright-core" install webkit
+          NODE_PATH="$RUNNER_TEMP/ui-check/node_modules" node Tests/camera-layout.cjs
+          NODE_PATH="$RUNNER_TEMP/ui-check/node_modules" node Tests/device-layout.cjs
+      - name: Compile for iPhone and package unsigned IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -project FL-Camera.xcodeproj -target FLCamera -configuration Release -sdk iphoneos ARCHS=arm64 ONLY_ACTIVE_ARCH=NO CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$RUNNER_TEMP/device" build
+          app="$RUNNER_TEMP/device/FLCamera.app"
+          executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Info.plist")
+          xcrun lipo "$app/$executable" -verify_arch arm64
+          # Older runtimes expose WebKit's Objective-C API without the Swift overlay.
+          xcrun otool -l "$app/$executable" | awk '$1=="cmd" {op=$2} $1=="name" && /libswiftWebKit\.dylib/ && op=="LC_LOAD_DYLIB" {print "Required WebKit overlay"; bad=1} END {exit bad}'
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Info.plist")" = 0.2.2
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Info.plist")" = 34
+          cmp Stilltone-Album.html "$app/Stilltone-Album.html"
+          cmp FL-Camera-Review.html "$app/FL-Camera-Review.html"
+          for lut in FL2 FL3 GR-Positive Classic-Negative Nostalgic-Negative Classic-Chrome; do test -s "$app/$lut.rgba"; done
+          mkdir -p "$RUNNER_TEMP/package/Payload"
+          ditto "$app" "$RUNNER_TEMP/package/Payload/FLCamera.app"
+          cd "$RUNNER_TEMP/package"
+          /usr/bin/zip -qry "$GITHUB_WORKSPACE/FLCamera-unsigned.ipa" Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Stilltone-0.2.2-build34-unsigned
+          path: FLCamera-unsigned.ipa
+          if-no-files-found: error
