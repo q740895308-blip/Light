@@ -59,10 +59,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        device: [iPhone-SE-3rd-generation, iPhone-16-Pro-Max]
+        device: [iPhone-SE-3rd-generation, iPhone-14-Pro, iPhone-16, iPhone-16-Pro, iPhone-16-Pro-Max]
     steps:
       - uses: actions/checkout@v4
-      - name: Build and launch on compact and Max iPhone simulators
+      - name: Build and launch on the selected iPhone simulator
         shell: bash
         run: |
           set -euo pipefail
