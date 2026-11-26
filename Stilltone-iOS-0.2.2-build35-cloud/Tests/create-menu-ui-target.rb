@@ -10,6 +10,7 @@ tests.build_configurations.each do |config|
   config.build_settings.merge!({
     'TEST_TARGET_NAME' => app.name,
     'TARGETED_DEVICE_FAMILY' => '1',
+    'PRODUCT_NAME' => 'MenuUITests',
     'GENERATE_INFOPLIST_FILE' => 'YES',
     'PRODUCT_BUNDLE_IDENTIFIER' => 'com.example.flstudio.menu-ui-tests',
     'SWIFT_VERSION' => '5.0'
