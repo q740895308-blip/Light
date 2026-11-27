@@ -22,15 +22,21 @@ final class ZoomUITestDevice {
               let id = payload["zoomRequestID"] as? Int, id == request+1,
               let factor = (payload["value"] as? NSNumber)?.doubleValue, [0.5,1,2,3].contains(factor),
               payload["pinchID"] == nil else { report(web); return }
+        let from = zoom
         request = id
         zoom = factor
-        report(web)
+        let motion = PresetZoomMotion(started:0, initial:CGFloat(from), target:CGFloat(zoom), base:1, revision:revision)
+        let frames = (0...18).map { index -> Double in
+            let time = Double(index) / 18 * PresetZoomMotion.duration
+            return Double(motion.factor(at:time))
+        }
+        report(web, frames:frames)
     }
 
-    private func report(_ web: WKWebView) {
+    private func report(_ web: WKWebView, frames:[Double] = []) {
         let state: [String:Any] = ["ready":true,"busy":false,"formats":["HEIF"],"sizes":[12],
             "zoom":zoom,"zoomTarget":zoom,"zoomRequestID":request,"zoomSettling":false,
-            "inputRevision":revision,"zoomRange":[0.5,15.0],"lenses":[0.5,1,2,3],
+            "inputRevision":revision,"zoomRange":[0.5,15.0],"lenses":[0.5,1,2,3],"presentedZoomFrames":true,
             "opticalZoomStops":[0.5,1,3],"live":false,"flash":false,"biasLimits":[-2,2]]
         let probe = """
         window.receiveCamera(state);
@@ -46,7 +52,6 @@ final class ZoomUITestDevice {
             for (const type of ['pointerdown','pointerup','pointercancel']) {
                 document.addEventListener(type, event => {
                     const target = event.target.closest('[data-step]')?.dataset.step ?? event.target.tagName;
-                    panel.dataset.heldStep = type === 'pointerdown' ? target : '';
                     hits.textContent += ' ' + [type, target, Math.round(event.clientX), Math.round(event.clientY)].join('/');
                 }, {capture:true,passive:true});
             }
@@ -56,10 +61,38 @@ final class ZoomUITestDevice {
         const rail = document.querySelector('.capture-tools');
         const active = rail.querySelector('[data-step][aria-pressed=true]');
         receipt.textContent = ['zoom receipt', count, state.zoomRequestID, state.zoom, active?.dataset.step].join(' ');
-        if (count && panel.dataset.heldStep === String(state.zoom)) {
-            const observed = document.createElement('div');
-            observed.textContent = 'zoom acknowledged before release ' + state.zoomRequestID;
-            panel.append(observed);
+        if (frames.length) {
+            const buttons = Array.from(rail.querySelectorAll('[data-step]'));
+            const stops = buttons.map(b => Number(b.dataset.step));
+            const targetIndex = stops.indexOf(state.zoom);
+            const center = b => { const r = b.getBoundingClientRect(); return r.x + r.width / 2; };
+            const pitch = center(buttons[1]) - center(buttons[0]);
+            const measuredSlot = () => targetIndex - (center(buttons[targetIndex]) - innerWidth / 2) / pitch;
+            function expectedSlot(z) {
+                const hi = stops.findIndex(s => s >= z);
+                if (hi < 0) return stops.length - 1;
+                if (hi === 0) return 0;
+                return hi - 1 + Math.log(z / stops[hi-1]) / Math.log(stops[hi] / stops[hi-1]);
+            }
+            let maxError = Math.abs(measuredSlot() - expectedSlot(frames[0]));
+            let between = 0;
+            const start = performance.now(), low = Math.min(frames[0],state.zoom), high = Math.max(frames[0],state.zoom);
+            const nextFrame = () => new Promise(resolve => requestAnimationFrame(resolve));
+            for (let i = 0; i < frames.length; i++) {
+                const deadline = start + duration * 1000 * i / (frames.length-1);
+                let now = await nextFrame();
+                while (now < deadline) now = await nextFrame();
+                if (!receipt.isConnected) return;
+                const zoom = frames[i];
+                window.receiveZoomFrame({inputRevision:state.inputRevision, zoomRequestID:state.zoomRequestID,
+                                         zoom, settled:i === frames.length-1, presentedTime:now / 1000});
+                const pos = measuredSlot();
+                maxError = Math.max(maxError, Math.abs(pos - expectedSlot(zoom)));
+                if (pos > expectedSlot(low) + .02 && pos < expectedSlot(high) - .02) between++;
+            }
+            const result = document.createElement('div');
+            result.textContent = ['zoom frames',state.zoomRequestID,between,maxError.toFixed(4)].join(' ');
+            panel.append(result);
         }
         let previous = '', stable = 0;
         function measure() {
@@ -85,6 +118,6 @@ final class ZoomUITestDevice {
         }
         requestAnimationFrame(measure);
         """
-        STCallPageScript(web, probe, ["state":state,"count":commands], nil)
+        STCallPageScript(web, probe, ["state":state,"count":commands,"frames":frames,"duration":PresetZoomMotion.duration], nil)
     }
 }

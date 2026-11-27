@@ -957,6 +957,7 @@ body.native-camera .phone{width:100%;height:100dvh;min-width:0;max-width:none;ma
 @media(prefers-reduced-motion:reduce){.native-camera .phone .shootrow{transition:none}}
 .native-camera .phone{--lens-pitch:44px;--picker-bottom:max(16px,var(--safe-bottom))}
 .native-camera .phone .capture-tools{width:max-content;gap:0;left:50%;transform:translateX(calc((-0.5 - var(--active-slot,0)) * var(--lens-pitch)));transition:transform 245ms cubic-bezier(.2,.78,.22,1)}
+.native-camera .phone footer .shootrow .capture-tools.frame-zoom{transition-property:bottom!important}
 .native-camera .phone .capture-tools button[data-step]{width:var(--lens-pitch);height:44px;background:transparent;backdrop-filter:none;font:500 15px/1 -apple-system,system-ui,sans-serif;font-variant-numeric:tabular-nums}
 .native-camera .phone .capture-tools button[aria-pressed=true]{background:radial-gradient(circle,rgba(49,46,42,.86) 60%,transparent 62%)}
 .native-camera .phone .capture-tools button:active,.native-camera .phone footer button:active:not(:disabled){opacity:.72}
@@ -1357,7 +1358,39 @@ window.finishWide48=ok=>{
 let pendingLens=null,lensTimeout,lensPress=null,blockedLensClick=null;
 let nextZoomID=0,pendingZoomID=null,zoomCommandCount=0;
 let pinchFrame=null,pinchTarget=null,pinchInFlight=null,pinchAckTimer;
+let presentedPreset=null,presentedTimer;
+function clearPresentedPreset(){
+    presentedPreset=null;clearTimeout(presentedTimer);tools.classList.remove('frame-zoom')
+}
+function zoomSlot(stops,z){
+    const hi=stops.findIndex(v=>v>=z);
+    if(hi<0)return Math.max(0,stops.length-1);
+    if(hi===0)return 0;
+    return hi-1+Math.log(z/stops[hi-1])/Math.log(stops[hi]/stops[hi-1])
+}
+function watchPresentedPreset(value,state){
+    if(state.presentedZoomFrames!==true||!Number.isSafeInteger(state.zoomRequestID)||document.hidden)return;
+    const start=presentedPreset?.zoom??state.zoom;
+    presentedPreset={id:Math.max(nextZoomID,state.zoomRequestID)+1,revision:state.inputRevision,target:value,
+        zoom:start,start,settled:false,time:-Infinity};
+    tools.classList.add('frame-zoom');
+    clearTimeout(presentedTimer);
+    presentedTimer=setTimeout(()=>{clearPresentedPreset();paintLens()},2200)
+}
+window.receiveZoomFrame=frame=>{
+    const motion=presentedPreset,state=window.nativeCameraState;
+    if(!motion||document.hidden||motion.settled||!frame||frame.inputRevision!==motion.revision||
+        frame.zoomRequestID!==motion.id||!(Number.isFinite(frame.zoom)&&frame.zoom>0)||
+        (Number.isFinite(frame.presentedTime)&&frame.presentedTime<=motion.time))return;
+    motion.zoom=frame.zoom;motion.settled=frame.settled===true;
+    if(Number.isFinite(frame.presentedTime))motion.time=frame.presentedTime;
+    if(motion.settled){motion.target=frame.zoom;paintLens()}
+    else if(!matchMedia('(prefers-reduced-motion: reduce)').matches){
+        tools.style.setProperty('--active-slot',String(zoomSlot(state.lenses,frame.zoom)))
+    }
+};
 function clearZoomInput(){
+    clearPresentedPreset();
     endPinch(false);pendingLens=null;pendingZoomID=null;cancelLensPress();clearTimeout(lensTimeout);
     fingers.clear();pinchDistance=0;pinchID=null
 }
@@ -1365,9 +1398,13 @@ function placeLens(value){const index=window.nativeCameraState.lenses.indexOf(va
 function paintLens(){
     const state=window.nativeCameraState;
     const target=state.zoomSettling&&Number.isFinite(state.zoomTarget)?state.zoomTarget:zoom;
-    const shownZoom=lensPress?.value??pendingLens??target;
+    const shownZoom=presentedPreset?.target??lensPress?.value??pendingLens??target;
     const selected=state.lenses.filter(value=>value<=shownZoom+.001).at(-1);
-    placeLens(selected);
+    if(presentedPreset){
+        const motion=presentedPreset;
+        const factor=!motion.settled&&matchMedia('(prefers-reduced-motion: reduce)').matches?motion.start:motion.zoom;
+        tools.style.setProperty('--active-slot',String(zoomSlot(state.lenses,factor)))
+    }else placeLens(selected);
     for(const button of tools.querySelectorAll('[data-step]')){
         const value=Number(button.dataset.step),active=value===selected;
         const label=Number((active?shownZoom:value).toFixed(2));
@@ -1410,9 +1447,10 @@ window.addEventListener('click',event=>{
     if(performance.now()-time>700||Math.hypot(event.clientX-x,event.clientY-y)>12)return;
     blockedLensClick=null;event.preventDefault();event.stopImmediatePropagation()
 },true);
-function abandonLensContact(){cancelLensPress(true);lensPress=null;blockedLensClick=null;endPinch(false)}
+function abandonLensContact(){cancelLensPress(true);lensPress=null;blockedLensClick=null;endPinch(false);clearPresentedPreset()}
 window.addEventListener('blur',abandonLensContact);
 window.addEventListener('pagehide',abandonLensContact);
+document.addEventListener('visibilitychange',()=>{if(document.hidden)abandonLensContact()});
 function makeLensButton(value){
     const button=document.createElement('button');
     button.dataset.step=value;
@@ -1440,6 +1478,7 @@ glideZoom=value=>{
     return issueLens(value,state)
 };
 function issueLens(value,state){
+    watchPresentedPreset(value,state);
     pendingLens=value;paintLens();clearTimeout(lensTimeout);
     lensTimeout=setTimeout(()=>{pendingLens=null;pendingZoomID=null;paintLens()},2200);
     sendZoom(value,state,true);
@@ -1490,12 +1529,19 @@ endPinch=commit=>{
 };
 reviewZoom=(value,id,scale)=>{
     if(!Number.isFinite(value)||!hardwareReady())return;
+    if(presentedPreset)clearPresentedPreset();
     if(pendingLens!==null){pendingLens=null;pendingZoomID=null;clearTimeout(lensTimeout);paintLens()}
     pinchTarget={value,id,scale};
     if(pinchFrame===null)flushPinch()
 };
 let lastControlStateKey=null;
 function paintReportedZoom(state){
+    if(presentedPreset){
+        if(!hardwareReady(state)||state.presentedZoomFrames!==true||state.zoomRequestID>presentedPreset.id)
+            clearPresentedPreset();
+        else if(!presentedPreset.settled&&state.zoomRequestID===presentedPreset.id&&Number.isFinite(state.zoomTarget))
+            presentedPreset.target=state.zoomTarget
+    }
     if(!hardwareReady(state))cancelLensPress();
     const inRange=state.zoomRange&&pendingLens>=state.zoomRange[0]&&pendingLens<=state.zoomRange[1];
     if(!hardwareReady(state)||(!state.lenses.includes(pendingLens)&&!inRange)||

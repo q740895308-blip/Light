@@ -16,6 +16,7 @@ function method(source, signature) {
 }
 const program = `
 import Foundation
+${method(camera,'struct PresentedZoomFrame')}
 final class Queue {
     static let main = Queue()
     var delayed: [() -> Void] = []
@@ -59,6 +60,9 @@ final class Camera {
     var acceptingPreviewFrames = false, nativeThumbnails = false
     var hiddenStopGeneration: UInt64 = 0, thumbnailGeneration: UInt64 = 0
     var previewSourceGeneration: UInt64 = 0
+    var latestZoomFrame: PresentedZoomFrame?
+    func cancelZoomFrames() { latestZoomFrame = nil }
+    func cancelPresetZoom() {}
     let selected = Recipe()
     var latest: Int?, lastDisplayBuffer: Int?, waitingForPreview: Int?, transitionImage: Int?, visibleTransition: Int?, atlasRequest: Int?, shotID: Int?
     var starts = 0
@@ -87,6 +91,47 @@ final class Page {
     ${method(studio, 'private func setCaptureRequested(')}
     func update() { setCaptureRequested(shooting) }
 }
+// Exercise the production WK handoff with manually delayed JS completions.
+final class ZoomTestWeb {
+    var calls:[[String:Any]] = []
+    var completions:[(Any?,Error?) -> Void] = []
+}
+func STCallPageScript(_ web:ZoomTestWeb,_ script:String,_ args:[String:Any],_ completion:@escaping(Any?,Error?)->Void) {
+    precondition(script == "window.receiveZoomFrame(frame)")
+    web.calls.append(args["frame"] as! [String:Any]); web.completions.append(completion)
+}
+enum LiveCameraPreview { static var metal: Int? = 1 }
+final class ZoomTestOwner {
+    final class Device { var ready = true, inputRevision = 1, zoomRequestID = 2 }
+    let camera = Device()
+    var shootViewActive = true
+}
+final class ZoomTestBridge {
+    let owner = ZoomTestOwner()
+    var ready = true, web:ZoomTestWeb? = ZoomTestWeb()
+    var queuedZoom:(frame:PresentedZoomFrame,time:Double)?, zoomDelivery:UUID?
+    var lastZoomPresentation = 0.0
+    ${method(studio,'private var presentsZoomFrames: Bool')}
+    ${method(studio,'private func enqueueZoomFrame(')}
+    ${method(studio,'private func sendQueuedZoomFrame()')}
+    func frame(_ zoom:Double, at time:Double, settled:Bool = false) {
+        let frame = PresentedZoomFrame(zoom:zoom,inputRevision:owner.camera.inputRevision,zoomRequestID:owner.camera.zoomRequestID,settled:settled)
+        enqueueZoomFrame(frame,at:time)
+    }
+}
+let bridge = ZoomTestBridge(), web = bridge.web!
+bridge.frame(1,at:1); bridge.frame(1.5,at:2); bridge.frame(2,at:3,settled:true)
+precondition(web.calls.count == 1)
+web.completions.removeFirst()(nil,nil)
+let finalReport = web.calls.last!
+precondition(web.calls.count == 2 && finalReport["zoom"] as? Double == 2 && finalReport["settled"] as? Bool == true)
+bridge.frame(1.75,at:2.5); precondition(bridge.queuedZoom == nil)
+bridge.frame(2.2,at:4); bridge.owner.camera.inputRevision += 1
+web.completions.removeFirst()(nil,nil)
+bridge.owner.shootViewActive = false; bridge.frame(1,at:5)
+LiveCameraPreview.metal = nil; bridge.owner.shootViewActive = true; bridge.frame(1,at:6)
+precondition(web.calls.count == 2)
+print("PASS presented zoom frames coalesce, preserve final report and reject stale or inactive surfaces")
 let p = Page(), c = p.camera
 let preview = Camera()
 preview.start()
@@ -145,6 +190,7 @@ fallback.stopPoseTracking();precondition(UIDevice.current.balance == 0)
 print("PASS orientation lock, gravity axes, near-flat holding, motion rejection, single active source, fallback and stale callbacks")
 print("PASS camera lifecycle, background and inactive, balanced sensors, album dismissal, pending exposure drain, and stale stop")
 typealias CGFloat = Double
+${method(camera,'struct PresetZoomMotion')}
 enum Facing { case front, back }
 enum Kind { case builtInWideAngleCamera, builtInUltraWideCamera, builtInTelephotoCamera }
 struct Part { let deviceType: Kind }
@@ -194,6 +240,15 @@ final class Flip {
     func sizeChoices(_ device:AVCaptureDevice,highResolution:Bool)->[Int] { [12] }
     func setFallbackLenses(_ device:AVCaptureDevice,displayZoom:Double) {}
     func refreshMacroState(_ device:AVCaptureDevice) {}
+    func cancelZoomFrames() {}
+    var presetZoom: PresetZoomMotion?
+    func cancelPresetZoom() { presetZoom=nil }
+    func startPresetTicks() {}
+    func zoomUptime() -> Double { 0 }
+    ${method(camera,'private func stepPresetZoom(')}
+    ${method(camera,'private func finishPresetZoom(')}
+    func finishZoom() { stepPresetZoom(at:0.30) }
+    func beginZoomFrames(_ device:AVCaptureDevice,base:CGFloat,target:Double,requestID:Int) {}
     ${method(camera, 'private func zoomCapabilities(')}
     func profile(_ device:AVCaptureDevice) -> (stops:[Double], optical:[Double], range:[Double]) { zoomCapabilities(device) }
     func report(_ error:String) {}
@@ -249,8 +304,9 @@ for high in [false,true] {
                 if actual == tap*2 {
                     precondition(!f.zoomSettling)
                 } else {
-                    precondition(f.zoomSettling && rear.device.commandedFactor == tap*2)
-                    rear.device.videoZoomFactor = rear.device.commandedFactor; rear.device.isRampingVideoZoom=false
+                    precondition(f.zoomSettling && f.presetZoom?.target == tap*2)
+                    f.finishZoom()
+                    precondition(!f.zoomSettling && rear.device.videoZoomFactor==tap*2)
                 }
             }
         }

@@ -2,6 +2,7 @@ import SwiftUI
 import PhotosUI
 import Photos
 import MetalKit
+import Combine
 import CoreImage
 import WebKit
 import AVFoundation
@@ -275,12 +276,15 @@ private struct CameraFeed: UIViewRepresentable {
     func updateUIView(_ view: CameraFeedView, context: Context) { view.syncOrientation() }
 }
 private struct LiveCameraPreview: View {
-    private static let device = MTLCreateSystemDefaultDevice()
+    static let metal: (device:MTLDevice, queue:MTLCommandQueue)? = {
+        guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else { return nil }
+        return (device,queue)
+    }()
     let camera: Camera
     let enabled: Bool
     var body: some View {
-        if let device = Self.device {
-            GPUPreview(camera:camera, enabled:enabled, device:device)
+        if let metal = Self.metal {
+            GPUPreview(camera:camera, enabled:enabled, device:metal.device, queue:metal.queue)
         } else {
             CameraFeed(camera:camera)
         }
@@ -291,9 +295,10 @@ private struct GPUPreview: UIViewRepresentable {
     @ObservedObject var camera: Camera
     let enabled: Bool
     let device: MTLDevice
+    let queue: MTLCommandQueue
     final class Driver: NSObject, MTKViewDelegate {
         let camera: Camera
-        let queue: MTLCommandQueue?
+        let queue: MTLCommandQueue
         let renderer: Renderer
         let renderQueue = DispatchQueue(label:"fl.viewfinder", qos:.userInteractive)
         let slot = DispatchSemaphore(value: 1)
@@ -305,21 +310,21 @@ private struct GPUPreview: UIViewRepresentable {
         func invalidateSurface() {
             surfaceLock.lock(); surfaceVersion &+= 1; surfaceLock.unlock()
         }
-        init(_ camera: Camera, device: MTLDevice) {
+        init(_ camera: Camera, device: MTLDevice, queue: MTLCommandQueue) {
             self.camera = camera
-            queue = device.makeCommandQueue()
+            self.queue = queue
             renderer = Renderer(gpu:device)
         }
         func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) { invalidateSurface() }
         func draw(in view: MTKView) {
-            guard !view.isPaused, let layer = view.layer as? CAMetalLayer, let queue,
+            guard !view.isPaused, let layer = view.layer as? CAMetalLayer,
                   view.drawableSize.width > 0, view.drawableSize.height > 0,
                   let source = camera.pendingPreviewSource(), slot.wait(timeout:.now()) == .success else { return }
             let surface = version()
             renderQueue.async { [self] in autoreleasepool {
                 // Acquiring a drawable may block. Pick the newest camera frame once the surface is available.
                 guard surface == version(), let drawable = layer.nextDrawable(),
-                      surface == version(), let (buffer, recipe) = camera.previewFrame(for:source) else {
+                      surface == version(), let (buffer, recipe, zoom) = camera.previewFrame(for:source) else {
                     slot.signal(); return
                 }
                 let texture = drawable.texture
@@ -331,12 +336,22 @@ private struct GPUPreview: UIViewRepresentable {
                                         bounds:CGRect(origin:.zero,size:size),colorSpace:renderer.space)
                 guard surface == version(), camera.isPreviewSourceCurrent(source) else { slot.signal(); return }
                 command.addCompletedHandler { [slot] _ in slot.signal() }
+                if let zoom {
+                    drawable.addPresentedHandler { [weak self] shown in
+                        let time = shown.presentedTime
+                        DispatchQueue.main.async {
+                            guard let self, time > 0, self.version() == surface,
+                                  self.camera.isPreviewSourceCurrent(source) else { return }
+                            self.camera.didPresentZoomFrame(zoom,at:time)
+                        }
+                    }
+                }
                 command.present(drawable)
                 command.commit()
             } }
         }
     }
-    func makeCoordinator() -> Driver { Driver(camera, device:device) }
+    func makeCoordinator() -> Driver { Driver(camera, device:device, queue:queue) }
     func makeUIView(context: Context) -> MTKView {
         let view = MTKView(frame: .zero, device:device)
         view.isPaused = true; view.framebufferOnly = false; view.colorPixelFormat = .bgra8Unorm; view.preferredFramesPerSecond = 60; view.delegate = context.coordinator; return view
@@ -530,7 +545,41 @@ private struct SharedControls: UIViewRepresentable {
         private var railEpoch: UInt64 = 0
         private var webDelivery: UInt64?
         private var lastControlReload = -Double.infinity
-        init(_ owner:SharedControls) { self.owner = owner }
+        private var zoomSubscription: AnyCancellable?
+        private var queuedZoom: (frame:PresentedZoomFrame,time:Double)?
+        private var zoomDelivery: UUID?
+        private var lastZoomPresentation = 0.0
+        init(_ owner:SharedControls) {
+            self.owner = owner
+            super.init()
+            zoomSubscription = owner.camera.zoomFramePresented.sink { [weak self] entry in
+                self?.enqueueZoomFrame(entry.frame,at:entry.time)
+            }
+        }
+        private var presentsZoomFrames: Bool {
+            ready && owner.shootViewActive && owner.camera.ready && LiveCameraPreview.metal != nil
+        }
+        private func enqueueZoomFrame(_ frame:PresentedZoomFrame, at time:Double) {
+            guard presentsZoomFrames, time.isFinite, time > lastZoomPresentation else { return }
+            lastZoomPresentation = time
+            queuedZoom = (frame,time)
+            sendQueuedZoomFrame()
+        }
+        private func sendQueuedZoomFrame() {
+            guard zoomDelivery == nil, let (frame,time) = queuedZoom else { return }
+            queuedZoom = nil
+            guard presentsZoomFrames, let web, frame.inputRevision == owner.camera.inputRevision,
+                  frame.zoomRequestID == owner.camera.zoomRequestID else { return }
+            let id = UUID()
+            zoomDelivery = id
+            let report: [String:Any] = ["zoom":frame.zoom, "inputRevision":frame.inputRevision,
+                "zoomRequestID":frame.zoomRequestID, "settled":frame.settled, "presentedTime":time]
+            STCallPageScript(web,"window.receiveZoomFrame(frame)",["frame":report]) { [weak self] _,_ in
+                guard let self, self.zoomDelivery == id else { return }
+                self.zoomDelivery = nil
+                self.sendQueuedZoomFrame()
+            }
+        }
         func webView(_ webView:WKWebView,decidePolicyFor action:WKNavigationAction,decisionHandler:@escaping (WKNavigationActionPolicy)->Void) {
             let allowed = Bundle.main.url(forResource:"FL-Camera-Review",withExtension:"html")
             decisionHandler(action.request.url?.standardizedFileURL == allowed?.standardizedFileURL ? .allow : .cancel)
@@ -545,6 +594,7 @@ private struct SharedControls: UIViewRepresentable {
         func publish() {
             syncOrientation()
             guard ready,let web else { return }; let c = owner.camera
+            if !presentsZoomFrames { queuedZoom = nil }
             let interfaceAngle: Int
             switch lastOrientation {
             case .landscapeLeft: interfaceAngle = -90
@@ -558,7 +608,7 @@ private struct SharedControls: UIViewRepresentable {
                 "controlRotation":rotation == 270 ? -90 : rotation, "reduceTransparency":owner.reduceTransparency, "shootViewActive":owner.shootViewActive,
                 "zoomRange":c.zoomRange,"opticalZoomStops":c.opticalZoomStops,
                 "normalSizes":c.normalSizesWhenReturning,"inputRevision":c.inputRevision,"macroVisible":c.macroVisible,"macroEnabled":c.macroEnabled,"macroSymbol":Self.macroSymbol,
-                "zoomTarget":c.zoomTarget,"zoomRequestID":c.zoomRequestID]
+                "zoomTarget":c.zoomTarget,"zoomRequestID":c.zoomRequestID,"presentedZoomFrames":presentsZoomFrames]
             if let data = try? JSONSerialization.data(withJSONObject:state,options:.sortedKeys), data != lastState {
                 lastState = data
                 STCallPageScript(web, "window.receiveCamera(state)", ["state":state]) { [weak self] _, error in
@@ -615,6 +665,7 @@ private struct SharedControls: UIViewRepresentable {
         }
         func resetThumbnailPage() {
             controls?.material.isHidden = true
+            zoomDelivery = nil; queuedZoom = nil; lastZoomPresentation = 0
             ready = false; rail = false; sentThumbID = ""; initialSavedID = nil; syncThumbnailRail(); webDelivery = nil
         }
         func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage,

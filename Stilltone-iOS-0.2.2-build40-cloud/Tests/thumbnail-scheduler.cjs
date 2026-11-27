@@ -48,6 +48,10 @@ final class Camera {
     var lastDisplayPTS = CMTime.invalid, lastThumbnailPTS = CMTime.invalid, earliestPreviewTime = CMTime.invalid
     var expectedPreviewPosition: Position?
     var selected = 0, waitingForPreview: UUID?, latest: Int?, lastDisplayBuffer: Int?
+    var latestZoomFrame: Int?
+    func cancelZoomFrames() { latestZoomFrame = nil }
+    func cancelPresetZoom() {}
+    func zoomFrameLocked(at pts: CMTime) -> Int? { nil }
     var thumbnails: [Int:Int] = [:]
     func clearPreviewTransition(_ id: UUID, after: Double) {}
     func renderThumbnailBatch(_ buffer: Int, recipe: Int, generation: UInt64, source: UInt64, edge: CGFloat, looks: [Look], forWeb: Bool) -> (jpeg: String?, tiles: [Int:Int]) {

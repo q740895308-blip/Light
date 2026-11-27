@@ -121,6 +121,39 @@ test('only the newest zoom acknowledgement settles rapid button taps',()=>{
     t.report(snapshot({inputRevision:6,zoomRequestID:0,lenses:[1],zoom:1}));
     eq(selected(),1);
 });
+test('preset rail follows presented frames through a reversal and ignores early device completion',()=>{
+    const snapshot=patch=>state({inputRevision:5,zoomRequestID:4,zoom:2,zoomTarget:2,zoomSettling:false,
+        presentedZoomFrames:true,lenses:[.5,1,2,3],zoomRange:[.5,15],...patch});
+    const t=ready(snapshot({}));t.host.matchMedia=()=>({matches:false});
+    const slot=()=>Number(t.run("tools.style['--active-slot']"));
+    const frame=(id,zoom,settled,time,revision=5)=>t.host.receiveZoomFrame({inputRevision:revision,zoomRequestID:id,zoom,settled,presentedTime:time});
+    const three=lens(t,3),two=lens(t,2),e={pointerId:3,clientX:85,clientY:100};
+    three.dispatch('pointerdown',e);
+    eq(last(t,'zoom').value,3);eq(slot(),2);eq(three.getAttribute('aria-pressed'),'true');
+    three.dispatch('pointerup',e);
+    t.report(snapshot({zoom:3,zoomTarget:3,zoomRequestID:5}));
+    eq(slot(),2);
+    frame(5,Math.sqrt(6),false,1);assert.ok(Math.abs(slot()-2.5)<1e-8);
+    two.dispatch('pointerdown',e);eq(last(t,'zoom').value,2);
+    two.dispatch('pointerup',e);eq(two.getAttribute('aria-pressed'),'true');
+    frame(5,3,true,2);assert.ok(Math.abs(slot()-2.5)<1e-8);
+    frame(6,2.22,false,3);const mid=slot();assert.ok(mid>2&&mid<2.5);
+    frame(6,2.7,false,2);frame(6,2.8,false,4,4);eq(slot(),mid);
+    t.report(snapshot({zoom:2,zoomTarget:2,zoomRequestID:6}));eq(slot(),mid);
+    frame(6,2,true,4);eq(slot(),2);
+    frame(6,2.5,false,5);eq(slot(),2);
+});
+test('reduced motion waits for the presented endpoint; absent frames recover and input changes reset',()=>{
+    const s=p=>state({inputRevision:2,zoomRequestID:5,zoom:1,zoomTarget:1,presentedZoomFrames:true,lenses:[.5,1,2,3],...p});
+    const t=ready(s({})),slot=()=>Number(t.run("tools.style['--active-slot']"));
+    lens(t,3).click();eq(slot(),1);
+    t.host.receiveZoomFrame({inputRevision:2,zoomRequestID:6,zoom:2.25,settled:false});eq(slot(),1);
+    t.report(s({zoomRequestID:6,zoom:2,zoomTarget:2}));eq(slot(),1);
+    t.host.receiveZoomFrame({inputRevision:2,zoomRequestID:6,zoom:2,settled:true});eq(slot(),2);
+    lens(t,1).click();t.report(s({zoomRequestID:7}));eq(slot(),2);t.fireTimeout(2200);eq(slot(),1);
+    lens(t,2).click();t.report(s({inputRevision:3,zoom:1,lenses:[1],zoomRequestID:8}));eq(slot(),0);
+    t.host.receiveZoomFrame({inputRevision:2,zoomRequestID:8,zoom:2,settled:true});eq(slot(),0);
+});
 test('pinch takes over an in-flight ramp by relative scale and cancels stale frames',()=>{
     const snapshot=patch=>state({inputRevision:7,zoomRequestID:20,zoom:1,zoomTarget:3,zoomSettling:true,lenses:[.5,1,2,3],...patch});
     const t=ready(snapshot({})),stage=t.run('stage'),jobs=new Map();let next=0;

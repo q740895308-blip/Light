@@ -107,6 +107,56 @@ private enum LiveRender {
     }
 }
 
+struct PresetZoomMotion {
+    static let duration = 0.30
+    let started: Double
+    let initial: CGFloat
+    let target: CGFloat
+    let base: CGFloat
+    let revision: Int
+    func factor(at time: Double) -> CGFloat {
+        if time >= started + Self.duration { return target }
+        let t = min(1,max(0,(time-started)/Self.duration))
+        let eased = t*t*(3-2*t)
+        return initial * CGFloat(pow(Double(target/initial),eased))
+    }
+}
+
+struct PresentedZoomFrame {
+    let zoom: Double
+    let inputRevision: Int
+    let zoomRequestID: Int
+    let settled: Bool
+}
+
+private struct ZoomFrameTimeline {
+    let inputRevision: Int
+    let requestID: Int
+    let target: Double
+    let started: Double
+    var samples: [(time:Double, zoom:Double)]
+    var ended: Double?
+
+    mutating func frame(at pts: Double, now: Double, actual: Double, ramping: Bool) -> PresentedZoomFrame? {
+        guard actual.isFinite, actual > 0, now >= started else { return nil }
+        if ended == nil, !ramping, abs(actual-target) < 0.0000001 { ended = now }
+        samples.append((now,actual))
+        guard pts >= started else { return nil }
+        // Device reads arrive with the output callback. Reconstruct the logarithmic
+        // ramp at exposure time, which can precede that callback by several frames.
+        while samples.count > 1 && samples[1].time <= pts { samples.removeFirst() }
+        let a = samples[0]
+        var zoom = a.zoom
+        if samples.count > 1 {
+            let b = samples[1]
+            let t = min(1,max(0,(pts-a.time)/max(0.000001,b.time-a.time)))
+            zoom = exp(log(a.zoom) + (log(b.zoom)-log(a.zoom))*t)
+        }
+        return PresentedZoomFrame(zoom:zoom,inputRevision:inputRevision,zoomRequestID:requestID,
+                                  settled:ended.map { pts >= $0 } ?? false)
+    }
+}
+
 enum Look: String, CaseIterable {
     case original, FL2, FL3, positive = "GR-Positive", negative = "Classic-Negative", nostalgic = "Nostalgic-Negative", chrome = "Classic-Chrome"
     case cineG = "GR4-CineG", cineY = "GR4-CineY"
@@ -257,6 +307,50 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
     @Published private(set) var zoomTarget = 1.0
     @Published private(set) var zoomRequestID = 0
     @Published private(set) var zoomSettling = false
+    private var presetZoom: PresetZoomMotion?
+    private var presetTimer: DispatchSourceTimer?
+    private func cancelPresetZoom() {
+        presetTimer?.cancel()
+        presetTimer = nil
+        presetZoom = nil
+    }
+    private func zoomUptime() -> Double { ProcessInfo.processInfo.systemUptime }
+    private func startPresetTicks() {
+        let timer = DispatchSource.makeTimerSource(queue:capture)
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            self.stepPresetZoom(at:self.zoomUptime())
+        }
+        timer.schedule(deadline:.now(),repeating:.nanoseconds(16_666_667),leeway:.milliseconds(1))
+        presetTimer = timer
+        timer.resume()
+    }
+    private func stepPresetZoom(at now: Double) {
+        guard let motion = presetZoom else { return }
+        guard active, motion.revision == currentInputRevision, let device = input?.device else {
+            cancelPresetZoom(); return
+        }
+        let finished = now >= motion.started + PresetZoomMotion.duration
+        do {
+            try device.lockForConfiguration()
+            device.videoZoomFactor = min(device.maxAvailableVideoZoomFactor,
+                                         max(device.minAvailableVideoZoomFactor,motion.factor(at:now)))
+            device.unlockForConfiguration()
+        } catch {
+            report(error.localizedDescription)
+            cancelZoomFrames()
+            finishPresetZoom(device,base:motion.base)
+            return
+        }
+        if finished { finishPresetZoom(device,base:motion.base) }
+    }
+    private func finishPresetZoom(_ device: AVCaptureDevice, base: CGFloat) {
+        cancelPresetZoom()
+        let actual = Double(device.videoZoomFactor/base)
+        requestedDisplayZoom = actual
+        refreshMacroState(device)
+        DispatchQueue.main.async { self.lens = actual; self.zoomTarget = actual; self.zoomSettling = false }
+    }
     @Published private(set) var inputRevision = 0
     private var currentInputRevision = 0
     private var requestedDisplayZoom = 1.0
@@ -526,6 +620,46 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
         return (nil, tiles)
     }
     private var latest: CVPixelBuffer?
+    private var latestZoomFrame: PresentedZoomFrame?
+    private var frameTracking: (device:AVCaptureDevice, base:CGFloat, clock:CMClock, timeline:ZoomFrameTimeline)?
+    private var lastZoomPresentation = -Double.infinity
+    let zoomFramePresented = PassthroughSubject<(frame:PresentedZoomFrame,time:Double),Never>()
+    private func cancelZoomFrames() {
+        lock.lock()
+        frameTracking = nil; latestZoomFrame = nil
+        lock.unlock()
+    }
+    private func beginZoomFrames(_ device: AVCaptureDevice, base: CGFloat, target: Double, requestID: Int) {
+        let clock = session.masterClock ?? CMClockGetHostTimeClock()
+        let time = CMClockGetTime(clock).seconds, start = Double(device.videoZoomFactor/base)
+        let timeline = ZoomFrameTimeline(inputRevision:currentInputRevision,requestID:requestID,target:target,
+                                         started:time,samples:[(time,start)])
+        lock.lock()
+        frameTracking = (device,base,clock,timeline); latestZoomFrame = nil
+        lastZoomPresentation = -.infinity
+        lock.unlock()
+    }
+    // Called under lock on the serial video delegate queue. Sample only for an
+    // outstanding preset. Video data output has no universal per-frame zoom tag.
+    private func zoomFrameLocked(at pts: CMTime) -> PresentedZoomFrame? {
+        guard let track = frameTracking else { return nil }
+        let now = CMClockGetTime(track.clock).seconds
+        guard now.isFinite, now - track.timeline.started <= 1.5 else { frameTracking=nil; return nil }
+        let actual = Double(track.device.videoZoomFactor/track.base)
+        return frameTracking?.timeline.frame(at:pts.isNumeric ? pts.seconds : now,now:now,
+                                             actual:actual,ramping:track.device.isRampingVideoZoom)
+    }
+    @MainActor func didPresentZoomFrame(_ frame: PresentedZoomFrame, at time: Double) {
+        lock.lock()
+        guard let track = frameTracking, track.timeline.requestID == frame.zoomRequestID,
+              track.timeline.inputRevision == frame.inputRevision, time > lastZoomPresentation else {
+            lock.unlock(); return
+        }
+        lastZoomPresentation = time
+        if frame.settled { frameTracking = nil }
+        lock.unlock()
+        zoomFramePresented.send((frame,time))
+    }
     private var lastDisplayBuffer: CVPixelBuffer?, waitingForPreview: UUID?
     private var lastDisplayTime = -Double.infinity, lastDisplayPTS = CMTime.invalid
     private var previewSourceGeneration: UInt64 = 0
@@ -539,11 +673,11 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
         lock.lock(); defer { lock.unlock() }
         return acceptingPreviewFrames && latest != nil ? previewSourceGeneration : nil
     }
-    func previewFrame(for source: UInt64) -> (CVPixelBuffer, Recipe)? {
+    func previewFrame(for source: UInt64) -> (CVPixelBuffer, Recipe, PresentedZoomFrame?)? {
         lock.lock(); defer { lock.unlock() }
         guard acceptingPreviewFrames, source == previewSourceGeneration, let latest else { return nil }
         self.latest = nil
-        return (latest, selected)
+        return (latest, selected, latestZoomFrame)
     }
     func isPreviewSourceCurrent(_ source: UInt64) -> Bool {
         lock.lock(); defer { lock.unlock() }
@@ -589,6 +723,8 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
     }
     func stop() { capture.async {
         guard self.active else { return }
+        self.cancelPresetZoom()
+        self.cancelZoomFrames()
         self.active = false
         self.hiddenStopGeneration &+= 1
         self.lock.lock()
@@ -628,6 +764,8 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
         return 1
     }
     private func resetZoom(_ device: AVCaptureDevice, displayZoom: Double = 1) {
+        cancelPresetZoom()
+        cancelZoomFrames()
         pinchZoom = nil
         let base = wideFactor(device)
         do {
@@ -652,7 +790,7 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
     }
     private func macroAvailable(_ device: AVCaptureDevice) -> Bool {
         active && session.isRunning && !session.isInterrupted && !usingDedicatedWide &&
-            device.isVirtualDevice && device.position == .back && !device.isRampingVideoZoom &&
+            device.isVirtualDevice && device.position == .back && presetZoom == nil && !device.isRampingVideoZoom &&
             abs(device.videoZoomFactor / wideFactor(device) - 1) <= 0.001 &&
             device.supportedFallbackPrimaryConstituentDevices.contains {
                 $0.deviceType == .builtInUltraWideCamera && $0.isFocusModeSupported(.continuousAutoFocus)
@@ -714,6 +852,8 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
         return accepted
     }
     private func advanceInputRevision() {
+        cancelPresetZoom()
+        cancelZoomFrames()
         pinchZoom = nil
         currentInputRevision += 1
         let revision = currentInputRevision
@@ -738,6 +878,8 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
         }
     }
     private func suspendPreviewFrames() {
+        cancelPresetZoom()
+        cancelZoomFrames()
         lock.lock()
         acceptingPreviewFrames = false; latest = nil; lastDisplayBuffer = nil; waitingForPreview = nil
         previewSourceGeneration &+= 1
@@ -754,7 +896,7 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
     func setHighResolution(_ enabled: Bool, completion: @escaping (Bool) -> Void) {
         capture.async {
             guard self.active, !self.captureInFlight, let current=self.input, current.device.position == .back,
-                  !current.device.isRampingVideoZoom else { DispatchQueue.main.async { completion(false) }; return }
+                  self.presetZoom == nil, !current.device.isRampingVideoZoom else { DispatchQueue.main.async { completion(false) }; return }
             if self.usingDedicatedWide == enabled { DispatchQueue.main.async { completion(true) }; return }
             let candidate = enabled ? self.deviceInput(.back) : self.rearInput()
             guard let next=candidate, !enabled || next.device.formats.contains(where:{$0.supportedMaxPhotoDimensions.contains(where:{self.mp($0)==48})}) else {
@@ -863,7 +1005,7 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
             self.capture.async {
                 guard self.input?.device === changed else { return }
                 self.refreshMacroState(changed)
-                guard !changed.isRampingVideoZoom else { return }
+                guard self.presetZoom == nil, !changed.isRampingVideoZoom else { return }
                 let actual = Double(changed.videoZoomFactor / self.wideFactor(changed))
                 self.requestedDisplayZoom = actual
                 let choices = self.sizeChoices(changed, highResolution:self.mainZoom(changed))
@@ -950,6 +1092,7 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
     func selectLens(_ requested: Double, inputRevision: Int? = nil, requestID: Int? = nil,
                     pinchID: Int? = nil, pinchScale: Double? = nil) { capture.async {
         guard inputRevision == nil || inputRevision == self.currentInputRevision else { return }
+        self.cancelZoomFrames()
         func acknowledge(_ target: Double, actual: Double, settling: Bool) {
             DispatchQueue.main.async {
                 self.lens = actual; self.zoomTarget = target; self.zoomSettling = settling
@@ -962,8 +1105,8 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
         let base = self.wideFactor(device)
         func acknowledgeDevice() {
             let actual = Double(device.videoZoomFactor / base)
-            acknowledge(device.isRampingVideoZoom ? self.requestedDisplayZoom : actual,
-                        actual:actual,settling:device.isRampingVideoZoom)
+            let moving = self.presetZoom != nil || device.isRampingVideoZoom
+            acknowledge(moving ? self.requestedDisplayZoom : actual,actual:actual,settling:moving)
         }
         guard self.active, requested.isFinite, !self.captureInFlight else { acknowledgeDevice(); return }
         let displayZoom: Double
@@ -986,15 +1129,17 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
         }
         let factor = min(device.maxAvailableVideoZoomFactor,max(device.minAvailableVideoZoomFactor,CGFloat(displayZoom)*base))
         let target = Double(factor/base)
-        let ramping = device.isRampingVideoZoom
+        if let requestID, pinchID == nil {
+            self.beginZoomFrames(device,base:base,target:target,requestID:requestID)
+        }
+        let ramping = self.presetZoom != nil || device.isRampingVideoZoom
         let accepted = ramping ? self.requestedDisplayZoom : Double(device.videoZoomFactor/base)
         if abs(target-accepted)<0.0001 && !(ramping && pinchID != nil) { acknowledgeDevice(); return }
+        self.cancelPresetZoom()
         do {
             try device.lockForConfiguration(); defer { device.unlockForConfiguration() }
             let current = Double(device.videoZoomFactor/base)
-            if device.isRampingVideoZoom && (pinchID != nil || (target-current)*(self.requestedDisplayZoom-current) <= 0) {
-                device.cancelVideoZoomRamp()
-            }
+            if device.isRampingVideoZoom { device.cancelVideoZoomRamp() }
             if device.isVirtualDevice && !self.autoMacroEnabled &&
                 ((abs(self.requestedDisplayZoom-1) <= 0.001) != (abs(target-1) <= 0.001)) {
                 self.setFallbackLenses(device,displayZoom:target)
@@ -1006,12 +1151,14 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
                     self.refreshMacroState(device)
                 }
             } else if abs(target-current) >= 0.0001 {
-                device.ramp(toVideoZoomFactor:factor,withRate:16)
+                self.presetZoom = PresetZoomMotion(started:self.zoomUptime(),initial:device.videoZoomFactor,
+                                                  target:factor,base:base,revision:self.currentInputRevision)
+                self.startPresetTicks()
             }
             self.requestedDisplayZoom = target
-            let actual = Double(device.videoZoomFactor/base), settling = device.isRampingVideoZoom
+            let actual = Double(device.videoZoomFactor/base), settling = self.presetZoom != nil
             acknowledge(target,actual:actual,settling:settling)
-        } catch { acknowledgeDevice(); self.report(error.localizedDescription) }
+        } catch { self.cancelZoomFrames(); acknowledgeDevice(); self.report(error.localizedDescription) }
     } }
     func flip(inputRevision: Int? = nil) { capture.async {
         guard self.active, !self.captureInFlight, let old = self.input,
@@ -1052,6 +1199,7 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
             expectedPreviewPosition = nil; earliestPreviewTime = .invalid
         }
         let now = CACurrentMediaTime(), pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        latestZoomFrame = zoomFrameLocked(at:pts)
         latest = buffer; lastDisplayBuffer = buffer; lastDisplayTime = now; lastDisplayPTS = pts
         if let id=waitingForPreview { waitingForPreview=nil; clearPreviewTransition(id,after:0.12) }
         scheduleThumbnailsLocked(buffer, pts:pts, now:now)
@@ -1147,7 +1295,7 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
             guard self.active, self.session.isRunning, !self.session.isInterrupted, !self.captureInFlight, self.pending == nil else {
                 DispatchQueue.main.async { self.busy = false }; return
             }
-            guard self.input?.device.isRampingVideoZoom != true else {
+            guard self.presetZoom == nil, self.input?.device.isRampingVideoZoom != true else {
                 self.finish("镜头正在变焦，请在倍率稳定后拍摄。"); return
             }
             self.captureInFlight = true; self.shot = shutterRecipe; self.shotFile = file

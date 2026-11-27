@@ -1,6 +1,6 @@
 # Stilltone iOS 0.2.2 (40) · 实时变焦
 
-基于 0.2.2 (39)。点按倍率在手指按下时启动硬件变焦，双指捏合以当前取景倍率为起点。本次验收机型为 iPhone 14 Pro。实际入口为 StudioApp → SharedCapture。构建和模拟器记录见 verify/stilltone-build40 分支的 GitHub Actions，实际系统版本见模拟器日志。
+基于 0.2.2 (39)。轻点倍率会启动约 0.30 秒的变焦，起步加速，接近目标时减速。Metal 取景器显示画面后，倍率条按该帧的估算倍率更新位置。双指捏合以当前取景倍率为起点。本次验收机型为 iPhone 14 Pro。实际入口为 StudioApp → SharedCapture。构建和模拟器记录见 verify/stilltone-build40 分支的 GitHub Actions，实际系统版本见模拟器日志。
 
 在支持 Metal 的设备上，原图和滤镜使用同一取景画布与裁切，切换色表保留构图。拍摄菜单由 UIKit 提供实时厚磨砂，开启系统「降低透明度」后使用实色。滤镜条按可见区域请求最多五张预览，同一镜头的有效缩略图可在快速切换时复用。
 

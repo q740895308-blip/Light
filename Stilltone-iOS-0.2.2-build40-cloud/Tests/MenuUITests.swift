@@ -36,15 +36,16 @@ final class MenuUITests: XCTestCase {
         }
         for (index, step) in ["0.5","1","2","3","2"].enumerated() {
             let target = try center(of:step,request:20+index)
-            let coordinate = app.coordinate(withNormalizedOffset:target)
-            let verifyDuringContact = step == "2" || step == "3"
-            if verifyDuringContact { coordinate.press(forDuration:0.8) } else { coordinate.tap() }
+            app.coordinate(withNormalizedOffset:target).tap()
             let receipt = "zoom receipt \(index+1) \(21+index) \(step) \(step)"
             XCTAssertTrue(app.staticTexts[receipt].waitForExistence(timeout:5),receipt)
-            if verifyDuringContact {
-                XCTAssertTrue(app.staticTexts["zoom acknowledged before release \(21+index)"].exists,
-                              "The camera must receive \(step)× while the finger is still down")
-            }
+            let prefix = "zoom frames \(21+index) "
+            let measurement = app.staticTexts.matching(NSPredicate(format:"label BEGINSWITH %@",prefix)).firstMatch
+            XCTAssertTrue(measurement.waitForExistence(timeout:8),prefix)
+            let values = measurement.label.dropFirst(prefix.count).split(separator:" ")
+            XCTAssertEqual(values.count,2,measurement.label)
+            XCTAssertGreaterThan(try XCTUnwrap(Int(values[0])),1,"The rail must move between stops")
+            XCTAssertLessThan(try XCTUnwrap(Double(values[1])),0.035,"Every frame must match within 1.5 points")
             let selected = try center(of:step,request:21+index)
             XCTAssertEqual(selected.dx * app.frame.width,app.frame.width/2,accuracy:1.5,step)
         }

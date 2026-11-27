@@ -20,6 +20,9 @@ import Foundation
 import CoreVideo
 import CoreImage
 import Metal
+${method('struct PresetZoomMotion')}
+${method('struct PresentedZoomFrame')}
+${method('private struct ZoomFrameTimeline')}
 struct TestResources {
     static let main = TestResources()
     func url(forResource name:String, withExtension ext:String) -> URL? {
@@ -38,24 +41,30 @@ final class AVCaptureDevice {
     var constituentDevices = [Part(deviceType:.builtInUltraWideCamera),Part(deviceType:.builtInWideAngleCamera),Part(deviceType:.builtInTelephotoCamera)]
     var maxAvailableVideoZoomFactor:CGFloat = 12, minAvailableVideoZoomFactor:CGFloat = 1
     var videoZoomFactor:CGFloat = 2
-    var ramps:[CGFloat] = [], rates:[Float] = [], cancellations = 0, lockCount = 0
+    var cancellations = 0, lockCount = 0
     func lockForConfiguration() throws { lockCount += 1 }
     func unlockForConfiguration() {}
     func cancelVideoZoomRamp() { isRampingVideoZoom = false; cancellations += 1 }
-    func ramp(toVideoZoomFactor target:CGFloat, withRate rate:Float) {
-        ramps.append(target); rates.append(rate); isRampingVideoZoom = true
-    }
 }
 struct Input { let device:AVCaptureDevice }
 final class Camera {
     var active=true, captureInFlight=false, currentInputRevision=7, inputRevision=7, capture=Queue(), autoMacroEnabled=true
     var requestedDisplayZoom=1.0, lens=1.0, zoomTarget=1.0, zoomRequestID=0, zoomSettling=false
     var pinchZoom:(id:Int, revision:Int, device:ObjectIdentifier, base:Double)?
+    var presetZoom: PresetZoomMotion?, starts=0, clock=0.0
+    func cancelPresetZoom() { presetZoom=nil }
+    func startPresetTicks() { starts += 1 }
+    func zoomUptime() -> Double { clock }
+    ${method('private func stepPresetZoom(')}
+    ${method('private func finishPresetZoom(')}
+    func advance(to time: Double) { clock = time; stepPresetZoom(at:time) }
     var sizesMP:[Int]=[], input:Input?
     func sizeChoices(_ d:AVCaptureDevice, highResolution:Bool)->[Int]{ [12] }
     func mainZoom(_ d:AVCaptureDevice)->Bool{ true }
     func setFallbackLenses(_ d:AVCaptureDevice,displayZoom:Double){}
     func refreshMacroState(_ d:AVCaptureDevice){}
+    func cancelZoomFrames() {}
+    func beginZoomFrames(_ device:AVCaptureDevice,base:CGFloat,target:Double,requestID:Int) {}
     func report(_ e:String){ fatalError(e) }
     ${method('private func wideFactor(')}
     ${method('private func resetZoom(')}
@@ -74,15 +83,15 @@ final class Camera {
         rear.displayVideoZoomFactorMultiplier=0.5
         resetZoom(rear)
         selectLens(3,inputRevision:7,requestID:1)
-        precondition(zoomRequestID==1 && zoomTarget==3 && lens==1 && zoomSettling && rear.rates.last==16)
+        precondition(zoomRequestID==1 && zoomTarget==3 && lens==1 && zoomSettling && presetZoom?.target==6)
         let locks = rear.lockCount
         selectLens(3,inputRevision:7,requestID:2)
-        precondition(zoomRequestID==2 && rear.ramps == [6] && rear.cancellations==0 && rear.lockCount==locks)
+        precondition(zoomRequestID==2 && starts==1 && rear.lockCount==locks)
         rear.videoZoomFactor=3.2
         selectLens(2,inputRevision:7,requestID:3)
-        precondition(zoomRequestID==3 && lens==1.6 && zoomTarget==2 && rear.ramps == [6,4] && rear.cancellations==0)
+        precondition(zoomRequestID==3 && lens==1.6 && zoomTarget==2 && presetZoom?.initial==3.2 && presetZoom?.target==4)
         selectLens(0.5,inputRevision:6,requestID:4)
-        precondition(zoomRequestID==3 && rear.ramps.last==4)
+        precondition(zoomRequestID==3 && presetZoom?.target==4)
         let parked=requestedDisplayZoom
         let front=AVCaptureDevice(); front.isVirtualDevice=false; input=Input(device:front); resetZoom(front)
         precondition(front.videoZoomFactor==1 && zoomTarget==1 && zoomRequestID==3)
@@ -93,21 +102,22 @@ final class Camera {
         selectLens(3,inputRevision:7,requestID:4)
         precondition(lens==2 && zoomRequestID==3)
         selectLens(40,inputRevision:8,requestID:5)
-        precondition(zoomTarget==6 && rear.ramps.last==12 && zoomRequestID==5)
-        let beforeReverse = rear.cancellations
+        precondition(zoomTarget==6 && presetZoom?.target==12 && zoomRequestID==5)
+        advance(to:0.15)
+        let atReversal = rear.videoZoomFactor
         selectLens(1,inputRevision:8,requestID:6)
-        precondition(rear.cancellations==beforeReverse+1 && zoomTarget==1 && rear.ramps.last==2)
+        precondition(zoomTarget==1 && presetZoom?.target==2 && presetZoom?.initial==atReversal)
         captureInFlight=true
         selectLens(0.5,inputRevision:8,requestID:7)
-        precondition(zoomTarget==1 && zoomRequestID==7 && rear.ramps.count==4)
+        precondition(zoomTarget==1 && zoomRequestID==7 && presetZoom?.target==2)
         captureInFlight=false
         resetZoom(rear)
         selectLens(3,inputRevision:8,requestID:8)
         rear.videoZoomFactor=3 // 1.5x visible, the 3x ramp is still moving
-        let rampsBeforePinch = rear.ramps.count
+        let startsBeforePinch = starts
         selectLens(3.6,inputRevision:8,requestID:9,pinchID:21,pinchScale:1.2)
         precondition(abs(zoomTarget-1.8)<0.0001 && zoomRequestID==9 && !zoomSettling)
-        precondition(abs(rear.videoZoomFactor-3.6)<0.0001 && rear.ramps.count==rampsBeforePinch)
+        precondition(abs(rear.videoZoomFactor-3.6)<0.0001 && starts==startsBeforePinch && presetZoom==nil)
         selectLens(3.9,inputRevision:8,requestID:10,pinchID:21,pinchScale:1.3)
         precondition(abs(zoomTarget-1.95)<0.0001 && abs(rear.videoZoomFactor-3.9)<0.0001 && !zoomSettling)
         selectLens(3,inputRevision:8,requestID:11)
@@ -123,12 +133,31 @@ final class Camera {
         // A gesture that lands exactly on a still-distant preset must take over immediately.
         input=Input(device:rear); resetZoom(rear,displayZoom:2)
         selectLens(3,inputRevision:9,requestID:14)
-        precondition(rear.ramps.last==6 && rear.rates.last==16)
+        precondition(presetZoom?.target==6)
         selectLens(3,inputRevision:9,requestID:15,pinchID:23,pinchScale:1.5)
         precondition(rear.videoZoomFactor==6 && !zoomSettling && lens==3)
+        let start = clock
+        selectLens(1,inputRevision:9,requestID:16)
+        var observed = [Double(rear.videoZoomFactor)]
+        for ms in [50,100,150,200,250,299,300] {
+            advance(to:start+Double(ms)/1000)
+            observed.append(Double(rear.videoZoomFactor))
+            precondition(zoomSettling == (ms < 300))
+        }
+        let increments = (1...5).map { abs(log(observed[$0]/observed[$0-1])) }
+        precondition(increments[0] < increments[1] && increments[1] < increments[2])
+        precondition(increments[4] < increments[3] && rear.videoZoomFactor==2 && lens==1 && presetZoom==nil)
+        precondition(abs(observed[3] - sqrt(12.0)) < 0.0001)
     }
 }
 Camera().check()
+private var timeline = ZoomFrameTimeline(inputRevision:8,requestID:15,target:2,started:5,samples:[(5,1)])
+precondition(timeline.frame(at:4.99,now:5.01,actual:1,ramping:true)==nil)
+let intermediate = timeline.frame(at:5.02,now:5.03,actual:2,ramping:false)!
+precondition(abs(intermediate.zoom-sqrt(2.0))<0.001 && !intermediate.settled)
+precondition(intermediate.inputRevision==8 && intermediate.zoomRequestID==15)
+let finalFrame = timeline.frame(at:5.04,now:5.06,actual:2,ramping:false)!
+precondition(finalFrame.settled && finalFrame.zoom==2)
 print("PASS display zoom, duplicate ramp, retarget, rejected stale input, rear restoration, clamped target and busy acknowledgment")
 
 // Model the virtual device's optical field of view, then pass its output through
@@ -153,11 +182,7 @@ func checkViewfinder() {
         var measured: [Int] = []
         for display in [1,2,3,2] {
             camera.selectLens(Double(display))
-            if device.isRampingVideoZoom {
-                // Move the model to the endpoint actually passed to the device.
-                device.videoZoomFactor = device.ramps.last!
-                device.isRampingVideoZoom = false
-            }
+            camera.advance(to:camera.clock+0.30)
             let raw = device.videoZoomFactor
             let crop = CGRect(x:sensor.midX-sensor.width/(2*raw),y:sensor.midY-sensor.height/(2*raw),
                               width:sensor.width/raw,height:sensor.height/raw)
