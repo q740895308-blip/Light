@@ -119,7 +119,7 @@ enum DolbyMovie {
 final class MovieRecorder {
     private let queue = DispatchQueue(label:"stilltone.movie.writer",qos:.userInitiated)
     private let videoSlots = DispatchSemaphore(value:3)
-    private let audioSlots = DispatchSemaphore(value:32)
+    private let audioSlots = DispatchSemaphore(value:128)
     private let writer: AVAssetWriter
     private let picture: AVAssetWriterInput
     private var sound: AVAssetWriterInput?
@@ -137,6 +137,7 @@ final class MovieRecorder {
     private let durationLock = NSLock()
     private var durationSeconds = 0.0
     private var latest: CVPixelBuffer?
+    private var pendingAudio = [CMSampleBuffer]()
     private var receivedSound = false
     private var failure: Error?
     private var stopping = false
@@ -234,12 +235,21 @@ final class MovieRecorder {
         if next.lastVideo.isNumeric && (adjusted-next.lastVideo).seconds > 1 {
             fail(MovieIssue("取景视频帧中断，已停止录像。")); return
         }
-        guard sound.isReadyForMoreMediaData else { fail(MovieIssue("音频编码器无法及时写入麦克风数据。")); return }
         do {
-            let retimed = try Self.retime(sample, offset:pts-adjusted)
-            guard sound.append(retimed) else { throw writer.error ?? MovieIssue("录音写入失败。") }
-            clock = next; receivedSound = true
+            try drainAudio(sound)
+            guard pendingAudio.count < 128 else { throw MovieIssue("音频编码持续堵塞，已停止录像。") }
+            pendingAudio.append(try Self.retime(sample,offset:pts-adjusted))
+            clock = next
+            try drainAudio(sound)
         } catch { fail(error) }
+    }
+
+    private func drainAudio(_ input:AVAssetWriterInput) throws {
+        while !pendingAudio.isEmpty && input.isReadyForMoreMediaData {
+            guard input.append(pendingAudio[0]) else { throw writer.error ?? MovieIssue("录音写入失败。") }
+            pendingAudio.removeFirst()
+            receivedSound = true
+        }
     }
 
     private static func retime(_ sample:CMSampleBuffer,offset:CMTime) throws -> CMSampleBuffer {
@@ -364,22 +374,57 @@ final class MovieRecorder {
         queue.async {
             guard !self.stopping else { completion(.failure(MovieIssue("录像正在保存。"))); return }
             self.stopping = true
-            guard self.writer.status == .writing, self.clock.lastVideo.isNumeric, self.receivedSound else {
+            guard self.writer.status == .writing, self.clock.lastVideo.isNumeric, self.sound != nil else {
                 let error = self.writer.error ?? self.failure ?? MovieIssue("没有足够的音视频数据可以保存。")
                 if self.writer.status == .writing { self.writer.cancelWriting() }
                 try? FileManager.default.removeItem(at:self.file)
                 completion(.failure(error)); return
             }
-            self.writer.endSession(atSourceTime:self.clock.end)
-            self.picture.markAsFinished(); self.sound?.markAsFinished(); self.latest = nil
-            self.writer.finishWriting {
-                guard self.writer.status == .completed else {
-                    try? FileManager.default.removeItem(at:self.file)
-                    completion(.failure(self.writer.error ?? MovieIssue("录像文件未能完成。"))); return
-                }
-                completion(.success(self.file))
-            }
+            self.finishQueuedAudio(deadline:.now()+3,completion:completion)
         }
+    }
+
+    private func finishQueuedAudio(deadline:DispatchTime,completion:@escaping(Result<URL,Error>)->Void) {
+        if let sound {
+            do { try drainAudio(sound) } catch { failure = failure ?? error }
+        }
+        if !pendingAudio.isEmpty && failure == nil && writer.status == .writing {
+            if DispatchTime.now() < deadline {
+                queue.asyncAfter(deadline:.now()+0.01) { self.finishQueuedAudio(deadline:deadline,completion:completion) }
+                return
+            }
+            failure = MovieIssue("录音缓冲区未能在结束录像时写完。")
+        }
+        guard writer.status == .writing, receivedSound else {
+            let error = writer.error ?? failure ?? MovieIssue("没有足够的麦克风数据可以保存。")
+            if writer.status == .writing { writer.cancelWriting() }
+            try? FileManager.default.removeItem(at:file)
+            completion(.failure(error)); return
+        }
+        writer.endSession(atSourceTime:clock.end)
+        picture.markAsFinished(); sound?.markAsFinished(); latest = nil
+        writer.finishWriting {
+            guard self.writer.status == .completed else {
+                try? FileManager.default.removeItem(at:self.file)
+                completion(.failure(self.writer.error ?? MovieIssue("录像文件未能完成。"))); return
+            }
+            if let error = self.failure {
+                do {
+                    _ = try Self.preserve(self.file)
+                    completion(.failure(MovieIssue("\(error.localizedDescription) 中断前的片段已保留在“文件”中的 Stilltone／待检查录像。")))
+                } catch { completion(.failure(error)) }
+            } else { completion(.success(self.file)) }
+        }
+    }
+
+    private static func preserve(_ url:URL) throws -> URL {
+        let manager = FileManager.default
+        let documents = try manager.url(for:.documentDirectory,in:.userDomainMask,appropriateFor:nil,create:true)
+        let folder = documents.appendingPathComponent("待检查录像",isDirectory:true)
+        try manager.createDirectory(at:folder,withIntermediateDirectories:true)
+        let recovery = folder.appendingPathComponent(url.lastPathComponent)
+        try manager.moveItem(at:url,to:recovery)
+        return recovery
     }
 
     func stop(_ completion:@escaping(Result<String,Error>)->Void) {
@@ -388,11 +433,7 @@ final class MovieRecorder {
                 do {
                     let url = try result.get()
                     let manager = FileManager.default
-                    let documents = try manager.url(for:.documentDirectory,in:.userDomainMask,appropriateFor:nil,create:true)
-                    let folder = documents.appendingPathComponent("待检查录像",isDirectory:true)
-                    try manager.createDirectory(at:folder,withIntermediateDirectories:true)
-                    let recovery = folder.appendingPathComponent(url.lastPathComponent)
-                    try manager.moveItem(at:url,to:recovery)
+                    let recovery = try Self.preserve(url)
                     let pending: URL
                     do {
                         try await DolbyMovie.verify(recovery)

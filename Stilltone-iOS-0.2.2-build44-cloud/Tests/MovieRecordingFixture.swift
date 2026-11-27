@@ -130,18 +130,32 @@ private func verifyRenderedChart(_ asset:AVAsset,_ track:AVAssetTrack) throws {
             imageBufferAttributes:nil,compressedDataAllocator:nil,outputCallback:nil,refcon:nil,compressionSessionOut:&hardware)
         if let hardware { VTCompressionSessionInvalidate(hardware) }
         let recorder = try MovieRecorder(width:width,height:height,fps:30,recipe:Recipe(aspect:"16:9",look:.FL2,strength:0.5),
-            transform:.identity,onFailure:{ print("Encoder event:",$0.localizedDescription) })
+            transform:.identity,onFailure:{
+                FileHandle.standardError.write(Data("Encoder event: \($0.localizedDescription)\n".utf8))
+            })
         let chart = try image(width,height,320)
+        var acceptedFrames = 0
+        recorder.appendAudio(try sound(0))
         for i in 0..<60 {
             if i == 30 {
                 recorder.setPaused(true); recorder.appendAudio(try sound(60)); recorder.appendVideo(try video(chart,60)); recorder.setPaused(false)
             }
             let index = i >= 30 ? i+90 : i
-            // First audio packet supplies the native format. Subsequent packets
-            // follow the exposure at the same PTS, as the microphone does.
-            if i == 0 { recorder.appendAudio(try sound(0)) }
-            recorder.appendVideo(try video(chart,index)); recorder.appendAudio(try sound(index))
-            try await Task.sleep(nanoseconds:35_000_000)
+            // CI shader warmup and encoder backpressure vary by runner. Step
+            // the synthetic clock only after the specified exposure is written.
+            let frame = try video(chart,index), expectedEnd = Double(i+1)/30
+            let deadline = DispatchTime.now()+5
+            repeat {
+                recorder.appendVideo(frame)
+                try await Task.sleep(nanoseconds:12_000_000)
+            } while recorder.elapsed+0.000_001 < expectedEnd && DispatchTime.now() < deadline
+            guard recorder.elapsed+0.000_001 >= expectedEnd else {
+                FileHandle.standardError.write(Data("Input stalled at frame \(i), writer timeline \(recorder.elapsed)s\n".utf8))
+                break
+            }
+            acceptedFrames += 1
+            recorder.appendAudio(try sound(index))
+            try await Task.sleep(nanoseconds:23_000_000)
         }
         let result: Result<URL,Error> = await withCheckedContinuation { continuation in
             recorder.finishFile { continuation.resume(returning:$0) }
@@ -156,6 +170,7 @@ private func verifyRenderedChart(_ asset:AVAsset,_ track:AVAssetTrack) throws {
         }
         let url = try result.get()
         defer { try? FileManager.default.removeItem(at:url) }
+        precondition(acceptedFrames == 60,"Writer accepted \(acceptedFrames) of 60 movie frames")
         let asset = AVURLAsset(url:url), duration = try await asset.load(.duration).seconds
         guard duration > 1.80 && duration < 2.15 else { fatalError("Incorrect output duration \(duration)") }
         let videoTracks = try await asset.loadTracks(withMediaType:.video), audioTracks = try await asset.loadTracks(withMediaType:.audio)
