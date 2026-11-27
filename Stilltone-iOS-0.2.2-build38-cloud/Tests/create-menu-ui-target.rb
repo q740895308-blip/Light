@@ -8,7 +8,7 @@ studio = project.path.dirname + 'StudioApp.swift'
 source = studio.read
 anchor = '.frame(width:frame.width,height:frame.height)'
 raise 'Cannot locate the capture preview for the simulator scene' unless source.scan(anchor).size == 1
-studio.write(source.sub(anchor, <<~SWIFT))
+source = source.sub(anchor, <<~SWIFT)
   .overlay {
       if ProcessInfo.processInfo.arguments.contains("-menu-test-scene") {
           MenuMaterialTestScene().allowsHitTesting(false)
@@ -16,6 +16,18 @@ studio.write(source.sub(anchor, <<~SWIFT))
   }
   #{anchor}
 SWIFT
+app.add_file_references([project.main_group.new_file('Tests/ZoomUITestDevice.swift')])
+def inject_once(source, anchor, insert)
+  raise "Cannot locate unique UI test injection: #{anchor}" unless source.scan(anchor).size == 1
+  source.sub(anchor) { anchor + "\n" + insert }
+end
+source = inject_once(source, 'var ready = false, rail = false',
+  '        private let zoomUITestDevice = ZoomUITestDevice()')
+source = inject_once(source, 'guard ready,let web else { return }; let c = owner.camera',
+  '            if zoomUITestDevice.enabled { zoomUITestDevice.publish(web); return }')
+source = inject_once(source, 'case "zoom":',
+  '                if zoomUITestDevice.enabled, let web { zoomUITestDevice.accept(payload, in:web); return }')
+studio.write(source)
 tests = project.new_target(:ui_test_bundle, 'MenuUITests', :ios, '16.0')
 tests.add_dependency(app)
 tests.add_file_references([project.main_group.new_file('Tests/MenuUITests.swift')])

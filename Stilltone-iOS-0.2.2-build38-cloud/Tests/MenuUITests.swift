@@ -1,6 +1,31 @@
 import XCTest
 
 final class MenuUITests: XCTestCase {
+    func testZoomButtonsSendOrderedRequestsAndCenterOnIPhone14Pro() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication(bundleIdentifier:"com.example.flstudio.camera")
+        app.launchArguments = ["-zoom-ui-test"]
+        app.launch()
+        defer { app.terminate() }
+        XCUIDevice.shared.orientation = .portrait
+        let alert = app.buttons["好"].firstMatch
+        if alert.waitForExistence(timeout:4) { alert.tap() }
+        XCTAssertTrue(app.staticTexts["zoom receipt 0 20 1 1"].waitForExistence(timeout:15))
+        XCTAssertEqual(app.frame.width,393,accuracy:1)
+        for (index, step) in ["0.5","1","2","3"].enumerated() {
+            let label = step+" 倍，"+(step=="2" ? "数码变焦" : "镜头倍率")
+            let button = app.descendants(matching:.any).matching(NSPredicate(format:"label == %@",label)).firstMatch
+            XCTAssertTrue(button.waitForExistence(timeout:5),label)
+            button.tap()
+            let receipt = "zoom receipt \(index+1) \(21+index) \(step) \(step)"
+            XCTAssertTrue(app.staticTexts[receipt].waitForExistence(timeout:5),receipt)
+            let centered = XCTNSPredicateExpectation(predicate:NSPredicate { _,_ in
+                abs(button.frame.midX - app.frame.midX) <= 1.5
+            },object:nil)
+            XCTAssertEqual(XCTWaiter.wait(for:[centered],timeout:4),.completed,label)
+        }
+    }
+
     // Read a narrow band between the grabber and the first row of icons.
     // The scene behind that part of the drawer contains alternating four-point stripes.
     private func stripeSample(in screenshot: XCUIScreenshot, area: CGRect, screenWidth: CGFloat) throws -> (red: Int, blue: Int, contrast: Int) {
