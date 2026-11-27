@@ -6,23 +6,41 @@ final class MenuUITests: XCTestCase {
         let app = XCUIApplication(bundleIdentifier:"com.example.flstudio.camera")
         app.launchArguments = ["-zoom-ui-test"]
         app.launch()
-        defer { app.terminate() }
+        addTeardownBlock { [self] in
+            if (testRun?.failureCount ?? 0) > 0 {
+                let tree = XCTAttachment(string: app.debugDescription)
+                tree.name = "Zoom geometry, pointer hits and native receipts"
+                tree.lifetime = .keepAlways
+                add(tree)
+                let screen = XCTAttachment(screenshot: app.screenshot())
+                screen.lifetime = .keepAlways
+                add(screen)
+            }
+            app.terminate()
+        }
         XCUIDevice.shared.orientation = .portrait
         let alert = app.buttons["好"].firstMatch
         if alert.waitForExistence(timeout:4) { alert.tap() }
         XCTAssertTrue(app.staticTexts["zoom receipt 0 20 1 1"].waitForExistence(timeout:15))
         XCTAssertEqual(app.frame.width,393,accuracy:1)
+        func center(of step: String, request: Int) throws -> CGVector {
+            let prefix = "zoom point \(request) \(step) "
+            let point = app.staticTexts.matching(NSPredicate(format:"label BEGINSWITH %@",prefix)).firstMatch
+            XCTAssertTrue(point.waitForExistence(timeout:5),prefix)
+            let fields = point.label.dropFirst(prefix.count).split(separator:" ")
+            XCTAssertEqual(fields.count,3,point.label)
+            let x = try XCTUnwrap(Double(fields[0]))
+            let y = try XCTUnwrap(Double(fields[1]))
+            XCTAssertEqual(String(fields[2]),step,"The visible button center must hit its own control")
+            return CGVector(dx:CGFloat(x),dy:CGFloat(y))
+        }
         for (index, step) in ["0.5","1","2","3"].enumerated() {
-            let label = step+" 倍，"+(step=="2" ? "数码变焦" : "镜头倍率")
-            let button = app.descendants(matching:.any).matching(NSPredicate(format:"label == %@",label)).firstMatch
-            XCTAssertTrue(button.waitForExistence(timeout:5),label)
-            button.tap()
+            let target = try center(of:step,request:20+index)
+            app.coordinate(withNormalizedOffset:target).tap()
             let receipt = "zoom receipt \(index+1) \(21+index) \(step) \(step)"
             XCTAssertTrue(app.staticTexts[receipt].waitForExistence(timeout:5),receipt)
-            let centered = XCTNSPredicateExpectation(predicate:NSPredicate { _,_ in
-                abs(button.frame.midX - app.frame.midX) <= 1.5
-            },object:nil)
-            XCTAssertEqual(XCTWaiter.wait(for:[centered],timeout:4),.completed,label)
+            let selected = try center(of:step,request:21+index)
+            XCTAssertEqual(selected.dx * app.frame.width,app.frame.width/2,accuracy:1.5,step)
         }
     }
 
