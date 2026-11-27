@@ -5,6 +5,36 @@ import VideoToolbox
 private enum FixtureError: Error { case data(OSStatus), invalidBuffer }
 private func check(_ code:OSStatus) throws { guard code == noErr else { throw FixtureError.data(code) } }
 
+private func verifyDolbyMetadataChecks() throws {
+    var configuration = Data(repeating:0,count:23)
+    configuration[0] = 1; configuration[1] = 2; configuration[16] = 0xfd
+    configuration[17] = 0xfa; configuration[18] = 0xfa
+    precondition(DolbyMovie.main10(configuration))
+    configuration[17] = 0xf8
+    precondition(!DolbyMovie.main10(configuration))
+    precondition(DolbyMovie.profile84(Data([1,0,16,29,64])))
+    precondition(!DolbyMovie.profile84(Data([1,0,16,29,16])))
+
+    func containsRPU(_ bytes:[UInt8]) throws -> Bool {
+        var buffer:CMBlockBuffer?
+        try check(CMBlockBufferCreateWithMemoryBlock(allocator:nil,memoryBlock:nil,blockLength:bytes.count,
+            blockAllocator:kCFAllocatorDefault,customBlockSource:nil,offsetToData:0,
+            dataLength:bytes.count,flags:0,blockBufferOut:&buffer))
+        guard let buffer else { throw FixtureError.invalidBuffer }
+        try bytes.withUnsafeBytes {
+            try check(CMBlockBufferReplaceDataBytes(with:$0.baseAddress!,blockBuffer:buffer,
+                    offsetIntoDestination:0,dataLength:$0.count))
+        }
+        return DolbyMovie.hasRPU(buffer,lengthBytes:4)
+    }
+    let idr:[UInt8] = [0,0,0,3,38,1,0]
+    let rpu:[UInt8] = [0,0,0,3,124,1,25]
+    let negative = try containsRPU(idr), positive = try containsRPU(idr+rpu)
+    let truncated = try containsRPU(idr+Array(rpu.dropLast()))
+    precondition(!negative && positive && !truncated)
+    print("PASS Main10 and Dolby Vision 8.4 configuration, RPU NAL presence and truncation")
+}
+
 private func image(_ width:Int,_ height:Int,_ level:UInt16) throws -> CVPixelBuffer {
     var pixelBuffer: CVPixelBuffer?
     let attrs:[String:Any] = [kCVPixelBufferIOSurfacePropertiesKey as String:[:],kCVPixelBufferMetalCompatibilityKey as String:true]
@@ -46,7 +76,8 @@ private func sound(_ index:Int) throws -> CMSampleBuffer {
         magicCookieSize:0,magicCookie:nil,extensions:nil,formatDescriptionOut:&format))
     try check(CMBlockBufferCreateWithMemoryBlock(allocator:kCFAllocatorDefault,memoryBlock:nil,blockLength:samples*2,
         blockAllocator:kCFAllocatorDefault,customBlockSource:nil,offsetToData:0,dataLength:samples*2,flags:0,blockBufferOut:&block))
-    let values = (0..<samples).map { Int16(4000*sin(Double(index*samples+$0)*2*Double.pi*440/48000)) }
+    let phaseStep = 2.0 * Double.pi * 440.0 / 48000.0
+    let values:[Int16] = (0..<samples).map { i in Int16(4000.0*sin(Double(index*samples+i)*phaseStep)) }
     try values.withUnsafeBytes {
         try check(CMBlockBufferReplaceDataBytes(with:$0.baseAddress!,blockBuffer:block!,offsetIntoDestination:0,dataLength:$0.count))
     }
@@ -59,10 +90,27 @@ private func sound(_ index:Int) throws -> CMSampleBuffer {
     guard let sample else { throw FixtureError.invalidBuffer }; return sample
 }
 
+private func verifyRenderedChart(_ asset:AVAsset,_ track:AVAssetTrack) throws {
+    let reader = try AVAssetReader(asset:asset)
+    let frames = AVAssetReaderTrackOutput(track:track,outputSettings:[kCVPixelBufferPixelFormatTypeKey as String:kCVPixelFormatType_32BGRA])
+    reader.add(frames)
+    guard reader.startReading(), let sample = frames.copyNextSampleBuffer(), let pixels = CMSampleBufferGetImageBuffer(sample) else {
+        throw reader.error ?? FixtureError.invalidBuffer
+    }
+    defer { reader.cancelReading() }
+    try check(CVPixelBufferLockBaseAddress(pixels,.readOnly))
+    defer { CVPixelBufferUnlockBaseAddress(pixels,.readOnly) }
+    guard let base = CVPixelBufferGetBaseAddress(pixels) else { throw FixtureError.invalidBuffer }
+    let width = CVPixelBufferGetWidth(pixels), height = CVPixelBufferGetHeight(pixels)
+    let middle = base.advanced(by:height/2*CVPixelBufferGetBytesPerRow(pixels)).assumingMemoryBound(to:UInt8.self)
+    let dark = Int(middle[(width/4)*4+1]), bright = Int(middle[(width*3/4)*4+1])
+    precondition(bright-dark > 25,"Encoded FL2 chart collapsed to \(dark) and \(bright)")
+    print("PASS decoded FL2 MOV center scanline dark \(dark), bright \(bright)")
+}
+
 @main struct MovieRecordingFixture {
     static func main() async throws {
-        precondition(DolbyMovie.profile84(Data([1,0,16,29,64])))
-        precondition(!DolbyMovie.profile84(Data([1,0,16,29,16])))
+        try verifyDolbyMetadataChecks()
         var clock = MovieClock(fps:30)
         let t = CMTime(value:300,timescale:30)
         precondition(clock.audio(t,duration:clock.frameDuration) == nil)
@@ -118,6 +166,7 @@ private func sound(_ index:Int) throws -> CMSampleBuffer {
         precondition(CMFormatDescriptionGetMediaSubType(format) == kCMVideoCodecType_HEVC)
         precondition(CMFormatDescriptionGetExtension(format,extensionKey:kCMFormatDescriptionExtension_TransferFunction) as? String == kCMFormatDescriptionTransferFunction_ITU_R_2100_HLG as String)
         print("PASS production HEVC HLG 1280x720+AAC capture over pause/resume: duration \(duration), video \(videoTime.duration.seconds), audio \(audioTime.duration.seconds)")
+        try verifyRenderedChart(asset,track)
         do {
             try await DolbyMovie.verify(url)
             print("PASS encoded HEVC Dolby Vision 8.4 with dvvC/dvcC, in-band RPU, BT.2020 HLG and AAC packets")

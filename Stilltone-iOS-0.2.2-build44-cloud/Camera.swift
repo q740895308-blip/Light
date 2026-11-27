@@ -328,8 +328,10 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
     @Published private(set) var videoFPS = 60
     @Published private(set) var videoState = "idle"
     @Published private(set) var videoElapsed: Double = 0
-    @Published private(set) var videoTorch = false, videoTorchAvailable = false
-    @Published private(set) var videoMotion = false, videoMotionAvailable = false
+    @Published private(set) var videoTorch = false
+    @Published private(set) var videoTorchAvailable = false
+    @Published private(set) var videoMotion = false
+    @Published private(set) var videoMotionAvailable = false
     private typealias VideoFormat = (name:String, fps:Int, format:AVCaptureDevice.Format)
     private struct ParkedPhoto {
         let input: AVCaptureDeviceInput

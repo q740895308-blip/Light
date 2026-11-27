@@ -27,6 +27,8 @@ source = inject_once(source, 'guard ready,let web else { return }; let c = owner
   '            if zoomUITestDevice.enabled { zoomUITestDevice.publish(web,camera:c); return }')
 source = inject_once(source, 'case "zoom":',
   '                if zoomUITestDevice.enabled, let web { zoomUITestDevice.accept(payload, in:web); return }')
+source = inject_once(source, 'case "videoMode":',
+  '                if zoomUITestDevice.testsVideoMode, let web { zoomUITestDevice.acceptVideoMode(payload, in:web); return }' + "\n")
 zoom_preview = 'LiveCameraPreview(camera:camera, enabled:shooting, recipe:recipe)'
 raise 'Missing filtered capture preview for UI test' unless source.scan(zoom_preview).size == 1
 source = source.sub(zoom_preview, 'LiveCameraPreview(camera:camera, enabled:shooting, recipe:ProcessInfo.processInfo.arguments.contains("-zoom-ui-test") ? ZoomUITestDevice.previewRecipe : recipe)')

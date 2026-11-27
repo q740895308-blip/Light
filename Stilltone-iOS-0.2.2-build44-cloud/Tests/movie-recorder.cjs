@@ -10,7 +10,16 @@ if (!filters.includes('final class Renderer')) throw Error('Missing production L
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(),'stilltone-movie-test-'));
 try {
     const source = path.join(scratch,'Filters.swift');
-    fs.writeFileSync(source,'import AVFoundation\nimport CoreImage\nimport Metal\n'+filters);
+    const resources = `
+struct FixtureResources {
+    static let main = FixtureResources()
+    func url(forResource name:String, withExtension suffix:String) -> URL? {
+        URL(fileURLWithPath:FileManager.default.currentDirectoryPath).appendingPathComponent(name+"."+suffix)
+    }
+}
+`;
+    fs.writeFileSync(source,'import AVFoundation\nimport CoreImage\nimport Metal\n'+resources+
+        filters.replace('Bundle.main.url(forResource:', 'FixtureResources.main.url(forResource:'));
     fs.copyFileSync(path.join(root,'FL2.rgba'),path.join(scratch,'FL2.rgba'));
     const binary = path.join(scratch,'movie-test');
     execFileSync('xcrun',['swiftc','-O','-parse-as-library',source,path.join(root,'MovieRecorder.swift'),

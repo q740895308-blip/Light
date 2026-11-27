@@ -45,6 +45,13 @@ struct MovieClock {
 }
 
 enum DolbyMovie {
+    static func main10(_ record: Data) -> Bool {
+        let bytes = [UInt8](record.prefix(23))
+        // HEVCDecoderConfigurationRecord: profile_idc, chromaFormat and component depth.
+        return bytes.count == 23 && bytes[0] == 1 && bytes[1] & 31 == 2 &&
+            bytes[16] & 3 == 1 && bytes[17] & 7 == 2 && bytes[18] & 7 == 2
+    }
+
     static func profile84(_ config: Data) -> Bool {
         let bytes = [UInt8](config.prefix(5))
         return bytes.count == 5 && bytes[0] == 1 && bytes[2] >> 1 == 8 &&
@@ -81,7 +88,7 @@ enum DolbyMovie {
         let codec = CMFormatDescriptionGetMediaSubType(description)
         let atoms = CMFormatDescriptionGetExtension(description,extensionKey:kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms) as? [String:Any]
         guard codec == kCMVideoCodecType_HEVC || codec == kCMVideoCodecType_DolbyVisionHEVC,
-              let hvcC = atoms?["hvcC"] as? Data, hvcC.count > 21,
+              let hvcC = atoms?["hvcC"] as? Data, main10(hvcC),
               let config = (atoms?["dvvC"] ?? atoms?["dvcC"]) as? Data, profile84(config),
               CMFormatDescriptionGetExtension(description,extensionKey:kCMFormatDescriptionExtension_TransferFunction) as? String == kCMFormatDescriptionTransferFunction_ITU_R_2100_HLG as String,
               CMFormatDescriptionGetExtension(description,extensionKey:kCMFormatDescriptionExtension_ColorPrimaries) as? String == kCMFormatDescriptionColorPrimaries_ITU_R_2020 as String else {
@@ -380,12 +387,22 @@ final class MovieRecorder {
             Task {
                 do {
                     let url = try result.get()
-                    try await DolbyMovie.verify(url)
-                    let pending = try Self.pendingDirectory().appendingPathComponent(url.lastPathComponent)
-                    try FileManager.default.moveItem(at:url,to:pending)
+                    let manager = FileManager.default
+                    let documents = try manager.url(for:.documentDirectory,in:.userDomainMask,appropriateFor:nil,create:true)
+                    let folder = documents.appendingPathComponent("待检查录像",isDirectory:true)
+                    try manager.createDirectory(at:folder,withIntermediateDirectories:true)
+                    let recovery = folder.appendingPathComponent(url.lastPathComponent)
+                    try manager.moveItem(at:url,to:recovery)
+                    let pending: URL
+                    do {
+                        try await DolbyMovie.verify(recovery)
+                        pending = try Self.pendingDirectory().appendingPathComponent(url.lastPathComponent)
+                        try manager.moveItem(at:recovery,to:pending)
+                    } catch {
+                        throw MovieIssue("\(error.localizedDescription) 录像已保留在“文件”中的 Stilltone／待检查录像。")
+                    }
                     completion(.success(try await Self.library.save(pending)))
                 } catch {
-                    if case .success(let url) = result { try? FileManager.default.removeItem(at:url) }
                     completion(.failure(error))
                 }
             }

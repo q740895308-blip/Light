@@ -38,6 +38,9 @@ private enum ZoomTestChart {
 final class ZoomUITestDevice {
     static let previewRecipe = Recipe(aspect:"4:3",look:.FL2,strength:0.1)
     let enabled = ProcessInfo.processInfo.arguments.contains("-zoom-ui-test")
+    let testsVideoMode = ProcessInfo.processInfo.arguments.contains("-video-mode-ui-test")
+    private var videoMode = false
+    private var modeCommands = 0
     private let revision = 73
     private var request = 20
     private var zoom = 1.0
@@ -84,11 +87,25 @@ final class ZoomUITestDevice {
         }
     }
 
+    func acceptVideoMode(_ payload: [String:Any], in web: WKWebView) {
+        guard let enabled = payload["enabled"] as? Bool else { return }
+        modeCommands += 1
+        videoMode = enabled
+        report(web)
+    }
+
     private func report(_ web: WKWebView, frames:[Double] = []) {
-        let state: [String:Any] = ["ready":true,"busy":false,"formats":["HEIF"],"sizes":[12],
+        var state: [String:Any] = ["ready":true,"busy":false,"formats":["HEIF"],"sizes":[12],
             "zoom":frames.first ?? zoom,"zoomTarget":zoom,"zoomRequestID":request,"zoomSettling":!frames.isEmpty,
             "inputRevision":revision,"zoomRange":[0.5,15.0],"lenses":[0.5,1,2,3],"presentedZoomFrames":true,
             "opticalZoomStops":[0.5,1,3],"live":false,"flash":false,"biasLimits":[-2,2]]
+        if testsVideoMode {
+            state["videoMode"] = videoMode
+            state["videoState"] = "idle"
+            state["videoResolution"] = "HD"
+            state["videoFPS"] = 30
+            state["videoChoices"] = ["HD":[30]]
+        }
         let probe = """
         window.receiveCamera(state);
         let panel = document.getElementById('zoom-test-probe');
@@ -109,6 +126,21 @@ final class ZoomUITestDevice {
         }
         const receipt = document.createElement('div');
         panel.replaceChildren(receipt);
+        if (typeof state.videoMode === 'boolean') {
+            function measureMode() {
+                if (!receipt.isConnected) return;
+                const mode = document.querySelector('.mode'), choice = mode.querySelector('[aria-pressed=true]');
+                const box = mode.getBoundingClientRect(), chosen = choice.getBoundingClientRect();
+                const x = box.x + box.width / 2, y = box.y + box.height / 2;
+                if (Math.abs(chosen.x + chosen.width / 2 - x) >= 1) { requestAnimationFrame(measureMode); return; }
+                const stage = document.querySelector('.stage');
+                const line = document.createElement('div');
+                line.textContent = ['mode receipt', modeCount, choice.textContent, stage.dataset.format,
+                                    (x/innerWidth).toFixed(6), (y/innerHeight).toFixed(6)].join(' ');
+                panel.append(line);
+            }
+            requestAnimationFrame(measureMode);
+        }
         const rail = document.querySelector('.capture-tools');
         const active = rail.querySelector('[data-step][aria-pressed=true]');
         receipt.textContent = ['zoom receipt', count, state.zoomRequestID, state.zoomTarget, active?.dataset.step].join(' ');
@@ -177,6 +209,6 @@ final class ZoomUITestDevice {
         }
         requestAnimationFrame(measure);
         """
-        STCallPageScript(web, probe, ["state":state,"count":commands,"frames":frames,"duration":PresetZoomMotion.duration], nil)
+        STCallPageScript(web, probe, ["state":state,"count":commands,"modeCount":modeCommands,"frames":frames,"duration":PresetZoomMotion.duration], nil)
     }
 }

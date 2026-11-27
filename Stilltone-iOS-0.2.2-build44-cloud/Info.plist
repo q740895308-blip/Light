@@ -22,6 +22,10 @@
 	<true/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>使用相机取景、拍照和录制滤镜视频。</string>
 	<key>NSMicrophoneUsageDescription</key>

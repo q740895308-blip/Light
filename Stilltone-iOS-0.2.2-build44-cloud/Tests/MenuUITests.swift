@@ -1,6 +1,33 @@
 import XCTest
 
 final class MenuUITests: XCTestCase {
+    func testVideoModeRoundTripBySwipingCapsuleOnIPhone14Pro() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication(bundleIdentifier:"com.example.flstudio.camera")
+        app.launchArguments = ["-zoom-ui-test","-video-mode-ui-test"]
+        app.launch()
+        defer { app.terminate() }
+        XCUIDevice.shared.orientation = .portrait
+        let alert = app.buttons["好"].firstMatch
+        if alert.waitForExistence(timeout:4) { alert.tap() }
+        func capsule(_ prefix: String) throws -> XCUICoordinate {
+            let receipt = app.staticTexts.matching(NSPredicate(format:"label BEGINSWITH %@",prefix)).firstMatch
+            XCTAssertTrue(receipt.waitForExistence(timeout:12),prefix)
+            let coords = receipt.label.dropFirst(prefix.count).split(separator:" ")
+            XCTAssertEqual(coords.count,2)
+            let x = try XCTUnwrap(Double(coords[0])), y = try XCTUnwrap(Double(coords[1]))
+            XCTAssertEqual(x * Double(app.frame.width),Double(app.frame.midX),accuracy:1)
+            return app.coordinate(withNormalizedOffset:CGVector(dx:CGFloat(x),dy:CGFloat(y)))
+        }
+        let photo = try capsule("mode receipt 0 照片 4:3 ")
+        photo.press(forDuration:0.1,thenDragTo:photo.withOffset(CGVector(dx:48,dy:0)))
+        let video = try capsule("mode receipt 1 视频 16:9 ")
+        XCTAssertTrue(app.buttons["开始录像"].firstMatch.waitForExistence(timeout:3))
+        video.press(forDuration:0.1,thenDragTo:video.withOffset(CGVector(dx:-48,dy:0)))
+        _ = try capsule("mode receipt 2 照片 4:3 ")
+        XCTAssertTrue(app.buttons["拍照"].firstMatch.waitForExistence(timeout:3))
+    }
+
     func testZoomButtonsSendOrderedRequestsAndCenterOnIPhone14Pro() throws {
         continueAfterFailure = false
         let app = XCUIApplication(bundleIdentifier:"com.example.flstudio.camera")
