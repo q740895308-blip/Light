@@ -62,6 +62,15 @@ test('macro requires settled actual zoom of at least 1x and blocks old camera or
     eq(macro.hidden,false);eq(macro.disabled,true);macro.onclick({detail:0});eq(count(),1);
     t.report(snapshot({inputRevision:9,zoomRequestID:23}));macro.onclick({detail:1});eq(count(),1);
 });
+test('unversioned zoom reports restore macro only at the requested settled endpoint',()=>{
+    const snapshot=(zoom,patch={})=>state({zoom,lenses:[.5,1,2,3],macroVisible:true,macroEnabled:true,...patch});
+    const t=ready(snapshot(2)),macro=t.doc.querySelector('.macro-control');
+    lens(t,.5).click();t.report(snapshot(2));eq(macro.hidden,true);
+    t.report(snapshot(.5));eq(macro.hidden,true);
+    lens(t,1).click();t.report(snapshot(.8));eq(macro.hidden,true);
+    t.report(snapshot(1,{zoomSettling:true}));eq(macro.hidden,true);
+    t.report(snapshot(1));eq(macro.hidden,false);eq(macro.disabled,false);
+});
 test('RAW round trip preserves both HEIF Live preferences at 12 MP',()=>{
     for(const enabled of [true,false]){
         const t=ready();if(enabled)startLive(t);t.open('格式');pick(t,'格式','RAW');

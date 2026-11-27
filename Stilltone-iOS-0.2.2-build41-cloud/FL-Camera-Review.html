@@ -1569,8 +1569,10 @@ function paintReportedZoom(state){
     }
     if(!hardwareReady(state))cancelLensPress();
     const inRange=state.zoomRange&&pendingLens>=state.zoomRange[0]&&pendingLens<=state.zoomRange[1];
+    const legacySettled=pendingLens!==null&&pendingZoomID===null&&!Number.isSafeInteger(state.zoomRequestID)&&
+        state.zoomSettling!==true&&state.zoom===pendingLens;
     if(!hardwareReady(state)||(!state.lenses.includes(pendingLens)&&!inRange)||
-        (pendingZoomID!==null&&state.zoomRequestID>=pendingZoomID)){
+        legacySettled||(pendingZoomID!==null&&state.zoomRequestID>=pendingZoomID)){
         pendingLens=null;pendingZoomID=null;clearTimeout(lensTimeout)
     }
     paintLens()

@@ -18,7 +18,7 @@ const {verifyLutPixels}=require('./lut-pixels.cjs');
             await page.addInitScript(()=>{window.posts=[];Object.defineProperty(window,'webkit',{configurable:true,value:{messageHandlers:{camera:{postMessage:m=>window.posts.push(m)}}}})});
             await page.goto(pathToFileURL(path.join(__dirname,'..','FL-Camera-Review.html')).href);
             if(width===393){await verifyLutPixels(page,true);await verifyFilterFirstFrame(page);await page.reload()}
-            await page.evaluate(()=>window.receiveCamera({ready:true,busy:false,formats:['HEIF','RAW'],sizes:[12,48],lenses:[.5,1,2,3],zoom:1,flash:true,live:true,biasLimits:[-3,3]}));
+            await page.evaluate(()=>window.receiveCamera({ready:true,busy:false,formats:['HEIF','RAW'],sizes:[12,48],lenses:[.5,1,2,3],zoom:1,zoomTarget:1,zoomSettling:false,inputRevision:1,zoomRequestID:0,flash:true,live:true,biasLimits:[-3,3]}));
             if(width===393)await verifyMenuGlass(page);
             await verifyMenuDismissal(page);
             if(width===402||width===440){assert.deepEqual(errors,[]);await context.close();continue}
@@ -38,9 +38,11 @@ const {verifyLutPixels}=require('./lut-pixels.cjs');
             }
             async function checkZoom(value){
                 await page.locator('[data-step="'+value+'"]').tap();
-                assert.equal(await page.evaluate(()=>posts.filter(m=>m.type==='zoom').at(-1).value),value);
+                const command=await page.evaluate(()=>posts.filter(m=>m.type==='zoom').at(-1));
+                assert.equal(command.value,value);
+                assert.equal(command.inputRevision,1);assert.ok(Number.isSafeInteger(command.zoomRequestID));
                 assert.equal(await page.evaluate(()=>tools.style.getPropertyValue('--active-slot')),String([.5,1,2,3].indexOf(value)));
-                await page.evaluate(zoom=>window.receiveCamera({...window.nativeCameraState,zoom}),value);
+                await page.evaluate(({value,zoomRequestID})=>window.receiveCamera({...window.nativeCameraState,zoom:value,zoomTarget:value,zoomRequestID}),command);
                 await page.waitForFunction(()=>{
                     const active=document.querySelector('.capture-tools [aria-pressed=true]').getBoundingClientRect();
                     const anchor=innerWidth>innerHeight?'.stage':'#shutter';
@@ -67,7 +69,7 @@ const {verifyLutPixels}=require('./lut-pixels.cjs');
             assert.equal(await macro.getAttribute('aria-pressed'),'false');await macro.tap();
             assert.deepEqual(await page.evaluate(()=>posts.filter(m=>m.type==='macro').map(m=>m.enabled)),[false,true]);
             assert.equal(await page.evaluate(()=>posts.filter(m=>m.type==='capture'||m.type==='focus').length),0);
-            await reportMacro({busy:true});assert.equal(await macro.isDisabled(),true);
+            await reportMacro({busy:true});assert.equal(await macro.isVisible(),true);assert.equal(await macro.isDisabled(),true);
             await reportMacro({macroEnabled:true,busy:false});
             if(width===393){
                 await page.emulateMedia({reducedMotion:'reduce'});
