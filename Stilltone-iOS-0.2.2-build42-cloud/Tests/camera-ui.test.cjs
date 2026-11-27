@@ -187,7 +187,8 @@ test('reduced motion waits for the presented endpoint; absent frames recover and
     t.host.receiveZoomFrame({inputRevision:2,zoomRequestID:6,zoom:2.25,settled:false});eq(slot(),1);
     t.report(s({zoomRequestID:6,zoom:2,zoomTarget:2}));eq(slot(),1);
     t.host.receiveZoomFrame({inputRevision:2,zoomRequestID:6,zoom:2,settled:true});eq(slot(),2);
-    lens(t,1).click();t.report(s({zoomRequestID:7}));eq(slot(),2);t.fireTimeout(100);eq(slot(),1);
+    lens(t,1).click();t.report(s({zoomRequestID:7}));eq(slot(),2);t.fireTimeout(100);eq(slot(),2);
+    t.fireTimeout(400);eq(slot(),1);
     lens(t,2).click();t.report(s({inputRevision:3,zoom:1,lenses:[1],zoomRequestID:8}));eq(slot(),0);
     t.host.receiveZoomFrame({inputRevision:2,zoomRequestID:8,zoom:2,settled:true});eq(slot(),0);
 });
@@ -203,7 +204,25 @@ test('a missing presented endpoint uses only the current acknowledged actual zoo
     t.report(s({zoomRequestID:3,zoom:2.4,zoomTarget:3,zoomSettling:true}));
     t.fireTimeout(100);eq(slot(),1);
     t.report(s({zoomRequestID:3,zoom:2,zoomTarget:2}));
-    t.fireTimeout(100);eq(slot(),2);eq(lens(t,2).getAttribute('aria-pressed'),'true');
+    t.fireTimeout(400);eq(slot(),2);eq(lens(t,2).getAttribute('aria-pressed'),'true');
+});
+test('early hardware completion and late frame recovery track each ordered presented zoom',()=>{
+    const snapshot=p=>state({inputRevision:1,zoomRequestID:1,zoom:1,zoomTarget:1,zoomSettling:false,
+        presentedZoomFrames:true,lenses:[.5,1,2,3],...p});
+    const t=ready(snapshot({}));t.host.matchMedia=()=>({matches:false});
+    const slot=()=>Number(t.run("tools.style['--active-slot']"));
+    const frame=(zoom,time,settled=false)=>t.host.receiveZoomFrame({zoom,presentedTime:time,settled,inputRevision:1,zoomRequestID:2});
+    lens(t,3).click();t.report(snapshot({zoom:3,zoomTarget:3,zoomRequestID:2}));
+    t.advance(100);t.fireTimeout(100);eq(slot(),1);
+    frame(1.4,.1);assert.ok(slot()>1&&slot()<2);
+    t.advance(170);frame(2,.27);eq(slot(),2);
+    t.advance(100);frame(2.4,.37);assert.ok(slot()>2&&slot()<3);
+    t.fireTimeout(130);assert.ok(slot()<3); // the previous frame's silence timer was replaced
+    t.advance(100);t.fireTimeout(100);eq(slot(),3);
+    frame(2.9,.38);assert.ok(slot()>2&&slot()<3);
+    frame(2.2,.36);assert.ok(slot()>2.8);
+    frame(3,.40,true);eq(slot(),3);
+    frame(2,.41);eq(slot(),3);
 });
 test('pinch takes over an in-flight ramp by relative scale and cancels stale frames',()=>{
     const snapshot=patch=>state({inputRevision:7,zoomRequestID:20,zoom:1,zoomTarget:3,zoomSettling:true,lenses:[.5,1,2,3],...patch});

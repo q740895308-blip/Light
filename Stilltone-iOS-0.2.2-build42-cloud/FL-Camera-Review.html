@@ -1396,21 +1396,27 @@ function watchPresentedPreset(value,state){
     const start=presentedPreset?.zoom??state.zoom;
     clearTimeout(endpointTimer);endpointTimer=null;
     presentedPreset={id:Math.max(nextZoomID,state.zoomRequestID)+1,revision:state.inputRevision,target:value,
-        zoom:start,start,settled:false,time:-Infinity};
+        zoom:start,start,settled:false,displaySettled:false,time:-Infinity,started:performance.now()};
     tools.classList.add('frame-zoom');
     clearTimeout(presentedTimer);
     presentedTimer=setTimeout(()=>{clearPresentedPreset();paintLens()},2200)
 }
 window.receiveZoomFrame=frame=>{
     const motion=presentedPreset,state=window.nativeCameraState;
-    if(!motion||document.hidden||motion.settled||!frame||frame.inputRevision!==motion.revision||
+    if(!motion||document.hidden||motion.displaySettled||!frame||frame.inputRevision!==motion.revision||
         frame.zoomRequestID!==motion.id||!(Number.isFinite(frame.zoom)&&frame.zoom>0)||
         (Number.isFinite(frame.presentedTime)&&frame.presentedTime<=motion.time))return;
-    motion.zoom=frame.zoom;motion.settled=frame.settled===true;
+    const wasSettled=motion.settled;
+    motion.zoom=frame.zoom;motion.settled=motion.displaySettled=frame.settled===true;
     if(Number.isFinite(frame.presentedTime))motion.time=frame.presentedTime;
-    if(motion.settled){clearTimeout(endpointTimer);endpointTimer=null;motion.target=frame.zoom;paintLens()}
-    else if(!matchMedia('(prefers-reduced-motion: reduce)').matches){
-        tools.style.setProperty('--active-slot',String(zoomSlot(state.lenses,frame.zoom)))
+    clearTimeout(endpointTimer);endpointTimer=null;
+    if(motion.settled){motion.target=frame.zoom;paintLens()}
+    else{
+        waitForPresentedEndpoint(motion,state);
+        if(wasSettled)paintLens();
+        else if(!matchMedia('(prefers-reduced-motion: reduce)').matches){
+            tools.style.setProperty('--active-slot',String(zoomSlot(state.lenses,frame.zoom)))
+        }
     }
 };
 function clearZoomInput(){
@@ -1537,6 +1543,19 @@ reviewZoom=(value,id,scale)=>{
     if(pinchFrame===null)flushPinch()
 };
 let lastControlStateKey=null;
+function waitForPresentedEndpoint(motion,state){
+    if(endpointTimer!=null||state.zoomRequestID!==motion.id||state.zoomSettling!==false||!(state.zoom>0))return;
+    // Allow the full 300ms camera motion and 100ms of presentation silence.
+    const wait=Math.ceil(Math.max(100,400-(performance.now()-motion.started)));
+    endpointTimer=setTimeout(()=>{
+        endpointTimer=null;
+        const actual=window.nativeCameraState;
+        if(presentedPreset!==motion||motion.displaySettled||actual.inputRevision!==motion.revision||
+            actual.zoomRequestID!==motion.id||!hardwareReady(actual)||actual.zoomSettling!==false||!(actual.zoom>0))return;
+        clearTimeout(presentedTimer);
+        motion.zoom=motion.target=actual.zoom;motion.settled=true;paintLens()
+    },wait)
+}
 function paintReportedZoom(state){
     if(presentedPreset){
         if(!hardwareReady(state)||state.presentedZoomFrames!==true||state.zoomRequestID>presentedPreset.id)
@@ -1544,17 +1563,7 @@ function paintReportedZoom(state){
         else if(!presentedPreset.settled&&state.zoomRequestID===presentedPreset.id&&Number.isFinite(state.zoomTarget)){
             const motion=presentedPreset;
             motion.target=state.zoomTarget;
-            // Allow a few preview frames for Metal's presentation receipt after the device reaches its endpoint.
-            if(state.zoomSettling===false&&state.zoom>0&&endpointTimer==null){
-                endpointTimer=setTimeout(()=>{
-                    endpointTimer=null;
-                    const actual=window.nativeCameraState;
-                    if(presentedPreset===motion&&!motion.settled&&actual.inputRevision===motion.revision&&
-                        actual.zoomRequestID===motion.id&&hardwareReady(actual)&&actual.zoomSettling===false&&actual.zoom>0){
-                        motion.zoom=motion.target=actual.zoom;motion.settled=true;paintLens()
-                    }
-                },100)
-            }
+            waitForPresentedEndpoint(motion,state)
         }
     }
     const inRange=state.zoomRange&&pendingLens>=state.zoomRange[0]&&pendingLens<=state.zoomRange[1];

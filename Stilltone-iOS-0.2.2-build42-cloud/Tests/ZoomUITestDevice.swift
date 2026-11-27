@@ -9,8 +9,20 @@ private final class ZoomTestChart: ObservableObject {
     static let shared = ZoomTestChart()
     @Published private(set) var image: CGImage?
     private let renderer = Renderer()
+    private let renderQueue = DispatchQueue(label:"test.fov-chart")
+    private var generation = 0
 
     func expose(at displayZoom: Double) {
+        generation += 1
+        let current = generation
+        renderQueue.async {
+            let result = self.render(displayZoom)
+            DispatchQueue.main.async {
+                if current == self.generation { self.image = result }
+            }
+        }
+    }
+    private func render(_ displayZoom: Double) -> CGImage? {
         let base = rearWideZoomBase(wideIndex:1,switchOverFactors:[2,6],displayMultiplier:1)
         let factor = max(1,CGFloat(displayZoom)*base)
         let bounds = CGRect(x:0,y:0,width:768,height:1024)
@@ -23,7 +35,7 @@ private final class ZoomTestChart: ObservableObject {
             .transformed(by:CGAffineTransform(scaleX:factor,y:factor))
         let framing = PreviewFraming(clean:bounds,display:bounds.size,target:bounds.size)!
         let preview = renderer.viewfinder(frame,framing:framing,recipe:Recipe())
-        image = renderer.context.createCGImage(preview,from:bounds)
+        return renderer.context.createCGImage(preview,from:bounds)
     }
 }
 
@@ -61,18 +73,21 @@ final class ZoomUITestDevice {
         let from = zoom
         request = id
         zoom = factor
-        ZoomTestChart.shared.expose(at:zoom)
         let motion = PresetZoomMotion(started:0, initial:CGFloat(from), target:CGFloat(zoom), base:1, revision:revision)
         let frames = (0...18).map { index -> Double in
             let time = Double(index) / 18 * PresetZoomMotion.duration
             return Double(motion.factor(at:time))
         }
         report(web, frames:frames)
+        DispatchQueue.main.asyncAfter(deadline:.now()+PresetZoomMotion.duration) { [weak self] in
+            guard self?.request == id else { return }
+            ZoomTestChart.shared.expose(at:factor)
+        }
     }
 
     private func report(_ web: WKWebView, frames:[Double] = []) {
         let state: [String:Any] = ["ready":true,"busy":false,"formats":["HEIF"],"sizes":[12],
-            "zoom":zoom,"zoomTarget":zoom,"zoomRequestID":request,"zoomSettling":false,
+            "zoom":frames.first ?? zoom,"zoomTarget":zoom,"zoomRequestID":request,"zoomSettling":!frames.isEmpty,
             "inputRevision":revision,"zoomRange":[0.5,15.0],"lenses":[0.5,1,2,3],"presentedZoomFrames":true,
             "opticalZoomStops":[0.5,1,3],"live":false,"flash":false,"biasLimits":[-2,2]]
         let probe = """
@@ -97,11 +112,11 @@ final class ZoomUITestDevice {
         panel.replaceChildren(receipt);
         const rail = document.querySelector('.capture-tools');
         const active = rail.querySelector('[data-step][aria-pressed=true]');
-        receipt.textContent = ['zoom receipt', count, state.zoomRequestID, state.zoom, active?.dataset.step].join(' ');
+        receipt.textContent = ['zoom receipt', count, state.zoomRequestID, state.zoomTarget, active?.dataset.step].join(' ');
         if (frames.length) {
             const buttons = Array.from(rail.querySelectorAll('[data-step]'));
             const stops = buttons.map(b => Number(b.dataset.step));
-            const targetIndex = stops.indexOf(state.zoom);
+            const targetIndex = stops.indexOf(state.zoomTarget);
             const center = b => { const r = b.getBoundingClientRect(); return r.x + r.width / 2; };
             const pitch = center(buttons[1]) - center(buttons[0]);
             const measuredSlot = () => targetIndex - (center(buttons[targetIndex]) - innerWidth / 2) / pitch;
@@ -113,7 +128,14 @@ final class ZoomUITestDevice {
             }
             let maxError = Math.abs(measuredSlot() - expectedSlot(frames[0]));
             let between = 0;
-            const start = performance.now(), low = Math.min(frames[0],state.zoom), high = Math.max(frames[0],state.zoom);
+            const start = performance.now(), low = Math.min(frames[0],state.zoomTarget), high = Math.max(frames[0],state.zoomTarget);
+            let deviceSettled = false;
+            function finishDevice() {
+                if (deviceSettled || !receipt.isConnected) return;
+                deviceSettled = true;
+                window.receiveCamera({...state,zoom:state.zoomTarget,zoomSettling:false});
+            }
+            const endpoint = setTimeout(finishDevice,duration*1000);
             const nextFrame = () => new Promise(resolve => requestAnimationFrame(resolve));
             for (let i = 0; i < frames.length; i++) {
                 const deadline = start + duration * 1000 * i / (frames.length-1);
@@ -121,6 +143,7 @@ final class ZoomUITestDevice {
                 while (now < deadline) now = await nextFrame();
                 if (!receipt.isConnected) return;
                 const zoom = frames[i];
+                if (i === frames.length-1) { clearTimeout(endpoint); finishDevice(); }
                 window.receiveZoomFrame({inputRevision:state.inputRevision, zoomRequestID:state.zoomRequestID,
                                          zoom, settled:i === frames.length-1, presentedTime:now / 1000});
                 const pos = measuredSlot();

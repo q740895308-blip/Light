@@ -48,13 +48,17 @@ final class MenuUITests: XCTestCase {
             XCTAssertLessThan(try XCTUnwrap(Double(values[1])),0.035,"Every frame must match within 1.5 points")
             let selected = try center(of:step,request:21+index)
             XCTAssertEqual(selected.dx * app.frame.width,app.frame.width/2,accuracy:1.5,step)
-            let screenshot = app.screenshot()
-            let span = try chartWidth(in:screenshot)
             let displayed = try XCTUnwrap(Double(step))
-            let screenPixels = try XCTUnwrap(screenshot.image.cgImage).width
             // At physical wide 1x the bar spans 1/16 of the viewport.
-            XCTAssertEqual(Double(span),Double(screenPixels)*displayed/16,accuracy:3,
-                           "Measured calibration bar after tapping \(step)x")
+            var span = 0, screenPixels = 0
+            let presented = XCTNSPredicateExpectation(predicate:NSPredicate { _,_ in
+                let screen = app.screenshot()
+                screenPixels = screen.image.cgImage?.width ?? 0
+                span = (try? self.chartWidth(in:screen)) ?? 0
+                return span > 0 && abs(Double(span)-Double(screenPixels)*displayed/16) <= 3
+            },object:nil)
+            XCTAssertEqual(XCTWaiter.wait(for:[presented],timeout:6),.completed,
+                           "Measured \(span) pixels on \(screenPixels)px viewport after tapping \(step)x")
             print("FOV chart \(step)x: \(span) pixels on \(screenPixels)px viewport")
         }
     }
@@ -75,8 +79,8 @@ final class MenuUITests: XCTestCase {
             let i = 4*x
             return pixels[i+1] > 150 && pixels[i] < 70 && pixels[i+2] < 70
         }
-        let start = try XCTUnwrap(hits.first,"Missing calibration bar in viewfinder")
-        return try XCTUnwrap(hits.last)-start+1
+        guard let start = hits.first, let last = hits.last else { return 0 }
+        return last-start+1
     }
 
     // Read a narrow band between the grabber and the first row of icons.
