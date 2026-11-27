@@ -16,11 +16,18 @@ function sampleCube(buffer, size, pixel) {
 }
 
 async function verifyLutPixels(page, checkCamera) {
-    const samples = [[0,0,0],[1,254,255],[127,128,129],[51,172,249],[254,255,253],[255,255,255]];
-    for (const [name, size] of [['Classic-Chrome',65],['Classic-Negative',65],['Fuji-Eterna-Bypass',65],['Leica-M-Tone-V2',33]]) {
+    const samples = [[0,0,0],[1,254,255],[127,128,129],[51,172,249],[224,224,224],[240,240,240],[250,240,226],[254,255,253],[255,255,255]];
+    for (const [name, size] of [['FL2',33],['FL3',33],['Classic-Chrome',65],['Classic-Negative',65],['Fuji-Eterna-Bypass',65],['Leica-M-Tone-V2',33]]) {
         const buffer = fs.readFileSync(path.join(__dirname,'..',name+'.rgba'));
         assert.equal(buffer.length,16*size**3);
         const expected = samples.flatMap(pixel=>[...sampleCube(buffer,size,pixel),255]);
+        if (name === 'FL2' || name === 'FL3') {
+            const highlights = [192,208,224,240,255].map(gray => sampleCube(buffer,size,[gray,gray,gray]));
+            for (let i = 1; i < highlights.length; i++) {
+                assert.ok(highlights[i].every((value, channel) => value - highlights[i-1][channel] >= 4),
+                    name + ' merges distinct highlight levels: ' + JSON.stringify(highlights));
+            }
+        }
         const outputs = await page.evaluate(({name,samples,checkCamera}) => {
             const input = new ImageData(samples.length,1);
             input.data.set(samples.flatMap(pixel=>[...pixel,255]));
@@ -41,6 +48,6 @@ async function verifyLutPixels(page, checkCamera) {
                 name+' channel '+i+' got '+value+' expected '+expected[i]));
         }
     }
-    console.log('PASS '+(checkCamera?'camera and embedded editor':'album editor')+' pixels match 65³ Fuji and 33³ Leica cubes');
+    console.log('PASS '+(checkCamera?'camera and embedded editor':'album editor')+' pixels match Sony, Fuji and Leica cubes, including Sony highlight steps');
 }
 module.exports = {verifyLutPixels};

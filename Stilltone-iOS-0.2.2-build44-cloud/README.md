@@ -2,7 +2,7 @@
 
 基于 Build 43。横滑底部胶囊可在照片与视频之间切换。视频采用 16:9 取景，从设备支持的高清、4K 和 24、30、60 帧组合中选择，首次优先高清 60 帧。录像要求麦克风授权，使用 HEVC Main10、Dolby Vision Profile 8.4 和 AAC 音轨，封装成 MOV。暂停后继续写入同一个视频，录像中的白键可保存一张带当前滤镜的画面。拍照的变焦上限仍为 15×；录像按机型和当前镜头限制，例如 iPhone 14 Pro 后摄最高 9×。
 
-FL2、FL3 在 Build 43 的色表基础上将中间调线性亮度调至 70%，暗部和高亮平滑过渡。相机、相册和录像使用同一份色表。构建与模拟器记录见 verify/stilltone-build44 分支。
+FL2、FL3 从索尼 ILCE-7CM2 的 DCP 风格色表重新生成，用于已完成色调映射的 iPhone 画面。中性中灰参照 Build 43 降低约 30% 线性亮度，亮部保留渐变与色差。拍照、相册和录像使用同一份滤镜资源。构建与模拟器记录见 verify/stilltone-build44 分支。
 
 Build 44 的富士 Classic Chrome 和 Classic Negative 分别使用 classic_chrome.cube 和 classic_neg.cube 的完整 65³ 色表，沿用原有滤镜位置及配方标识。
 

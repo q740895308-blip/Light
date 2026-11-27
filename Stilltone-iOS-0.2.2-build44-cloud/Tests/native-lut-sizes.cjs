@@ -35,8 +35,8 @@ let projected = PreviewFraming(buffer:buffer!,target:target,outputRect:CGRect(x:
 precondition(projected.crop == CGRect(x:24,y:48,width:80,height:60))
 precondition(PreviewFraming(buffer:buffer!,target:target,outputRect:.null)!.crop == CGRect(x:0,y:0,width:160,height:120))
 print("PASS filtered video uses the system viewfinder's rectangle and falls back to the clean aperture")
-let looks = Look.allCases.filter { $0 == .chrome || $0 == .negative || $0.rawValue.hasPrefix("Fuji-") || $0.rawValue.hasPrefix("Leica-") }
-precondition(looks.count == 17)
+let looks = Look.allCases.filter { $0 == .FL2 || $0 == .FL3 || $0 == .chrome || $0 == .negative || $0.rawValue.hasPrefix("Fuji-") || $0.rawValue.hasPrefix("Leica-") }
+precondition(looks.count == 19)
 for look in looks {
     let n = look.cubeDimension
     let raw = try Data(contentsOf: TestResources.main.url(forResource:look.rawValue, withExtension:"rgba")!)
