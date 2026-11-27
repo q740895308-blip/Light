@@ -58,7 +58,8 @@ test('macro requires settled actual zoom of at least 1x and blocks old camera or
     t.report(snapshot({zoomRequestID:23}));check(true);
     macro.dispatch('pointerdown',{pointerId:9});t.report(snapshot({inputRevision:9,zoomRequestID:23}));check(true);
     macro.onclick({detail:1});eq(count(),1);
-    macro.dispatch('pointerdown',{pointerId:10});t.report(snapshot({inputRevision:9,zoomRequestID:23,busy:true}));check(false);
+    macro.dispatch('pointerdown',{pointerId:10});t.report(snapshot({inputRevision:9,zoomRequestID:23,busy:true}));
+    eq(macro.hidden,false);eq(macro.disabled,true);macro.onclick({detail:0});eq(count(),1);
     t.report(snapshot({inputRevision:9,zoomRequestID:23}));macro.onclick({detail:1});eq(count(),1);
 });
 test('RAW round trip preserves both HEIF Live preferences at 12 MP',()=>{

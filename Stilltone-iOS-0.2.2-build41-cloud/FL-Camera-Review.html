@@ -1089,7 +1089,7 @@ macroButton.onclick=event=>{
         const contact=macroContact;macroContact=null;
         if(contact.cancelled||contact.revision!==state.inputRevision||contact.request!==state.zoomRequestID||contact.enabled!==state.macroEnabled)return
     }
-    if(!canShowMacro(state)||!drawer.hidden||!selector.hidden||folding)return;
+    if(!canShowMacro(state)||!hardwareReady(state)||!drawer.hidden||!selector.hidden||folding)return;
     const command={enabled:!state.macroEnabled};
     if(Number.isSafeInteger(state.inputRevision))command.inputRevision=state.inputRevision;
     send('macro',command)
@@ -1098,15 +1098,16 @@ let lastMacroSymbol='';
 let lastZoomInputRevision=null;
 function canShowMacro(state){
     const unconfirmed=lastZoomInputRevision===state.inputRevision&&Number.isSafeInteger(state.zoomRequestID)&&state.zoomRequestID<nextZoomID;
-    return !document.hidden&&canUseCamera(state)&&state.macroVisible===true&&typeof state.macroEnabled==='boolean'&&
+    return !document.hidden&&!window.pendingWide48&&reportedFormats(state)&&state.zoomSettling!==true&&
+        state.macroVisible===true&&typeof state.macroEnabled==='boolean'&&
         Number.isFinite(state.zoom)&&state.zoom>=1&&(state.zoomTarget==null||state.zoomTarget>=1)&&
         !unconfirmed&&pendingLens===null&&pinchInFlight===null&&pinchTarget===null&&
         (!presentedPreset||(presentedPreset.settled&&presentedPreset.zoom>=1))
 }
 function updateMacroButton(state){
     macroButton.hidden=!canShowMacro(state);
-    macroButton.disabled=macroButton.hidden;
-    if(macroButton.hidden&&macroContact)macroContact.cancelled=true;
+    macroButton.disabled=macroButton.hidden||!hardwareReady(state);
+    if(macroButton.disabled&&macroContact)macroContact.cancelled=true;
     macroButton.setAttribute('aria-pressed',String(state.macroEnabled===true));
     macroButton.title=state.macroEnabled?'关闭自动微距':'开启自动微距';
     if(state.macroSymbol&&state.macroSymbol!==lastMacroSymbol){
