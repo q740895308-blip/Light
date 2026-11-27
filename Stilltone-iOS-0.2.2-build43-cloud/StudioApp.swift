@@ -345,7 +345,9 @@ private struct GPUPreview: UIViewRepresentable {
                 renderer.context.render(image,to:texture,commandBuffer:command,
                                         bounds:CGRect(origin:.zero,size:size),colorSpace:renderer.space)
                 guard surface == version(), camera.isPreviewSourceCurrent(source) else { slot.signal(); return }
-                command.addCompletedHandler { [slot,buffer] _ in withExtendedLifetime(buffer) { slot.signal() } }
+                command.addCompletedHandler { [slot,buffer] _ in
+                    withExtendedLifetime(buffer) { _ = slot.signal() }
+                }
                 #if !targetEnvironment(simulator)
                 if let zoom {
                     drawable.addPresentedHandler { [weak self] shown in
