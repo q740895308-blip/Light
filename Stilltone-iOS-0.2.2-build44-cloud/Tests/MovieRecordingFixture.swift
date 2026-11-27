@@ -163,7 +163,8 @@ private func verifyRenderedChart(_ asset:AVAsset,_ track:AVAssetTrack) throws {
         let videoTime = try await track.load(.timeRange), audioTime = try await microphone.load(.timeRange)
         precondition(abs(videoTime.end.seconds-audioTime.end.seconds) < 0.09 && audioTime.duration.seconds > 1.8)
         let format = try await track.load(.formatDescriptions)[0]
-        precondition(CMFormatDescriptionGetMediaSubType(format) == kCMVideoCodecType_HEVC)
+        let codec = CMFormatDescriptionGetMediaSubType(format)
+        precondition(codec == kCMVideoCodecType_HEVC || codec == kCMVideoCodecType_DolbyVisionHEVC)
         precondition(CMFormatDescriptionGetExtension(format,extensionKey:kCMFormatDescriptionExtension_TransferFunction) as? String == kCMFormatDescriptionTransferFunction_ITU_R_2100_HLG as String)
         print("PASS production HEVC HLG 1280x720+AAC capture over pause/resume: duration \(duration), video \(videoTime.duration.seconds), audio \(audioTime.duration.seconds)")
         try verifyRenderedChart(asset,track)
