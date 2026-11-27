@@ -17,7 +17,7 @@ function sampleCube(buffer, size, pixel) {
 
 async function verifyLutPixels(page, checkCamera) {
     const samples = [[0,0,0],[1,254,255],[127,128,129],[51,172,249],[254,255,253],[255,255,255]];
-    for (const [name, size] of [['Fuji-Eterna-Bypass',65],['Leica-M-Tone-V2',33]]) {
+    for (const [name, size] of [['Classic-Chrome',65],['Classic-Negative',65],['Fuji-Eterna-Bypass',65],['Leica-M-Tone-V2',33]]) {
         const buffer = fs.readFileSync(path.join(__dirname,'..',name+'.rgba'));
         assert.equal(buffer.length,16*size**3);
         const expected = samples.flatMap(pixel=>[...sampleCube(buffer,size,pixel),255]);

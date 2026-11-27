@@ -201,7 +201,7 @@ enum Look: String, CaseIterable {
     }
     var cubeDimension: Int {
         switch self {
-        case .astia, .eterna, .eternaBypass, .nos, .proNegHi, .proNegStd, .provia, .velvia: return 65
+        case .chrome, .negative, .astia, .eterna, .eternaBypass, .nos, .proNegHi, .proNegStd, .provia, .velvia: return 65
         default: return 33
         }
     }

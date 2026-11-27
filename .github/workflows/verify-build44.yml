@@ -10,12 +10,8 @@ permissions:
   contents: read
 jobs:
   movie:
-    name: HEVC Dolby Vision encode (${{ matrix.runner }})
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [macos-15, macos-15-intel]
-    runs-on: ${{ matrix.runner }}
+    name: HEVC Dolby Vision encode
+    runs-on: macos-15-intel
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4

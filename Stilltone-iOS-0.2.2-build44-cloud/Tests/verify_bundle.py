@@ -71,7 +71,7 @@ def check():
             seen.add(name)
             entry = json.loads(payload)
             raw = (ROOT / (name + ".rgba")).read_bytes()
-            grid = 65 if name.startswith("Fuji-") else 33
+            grid = 65 if name.startswith("Fuji-") or name in {"Classic-Chrome", "Classic-Negative"} else 33
             require(entry.get("size", 33) == grid, f"{page} declares the wrong grid for {name}")
             require(len(raw) == grid**3 * 4 * 4, "wrong LUT dimension: " + name)
             require(base64.b64decode(entry["data"], validate=True) == raw, f"{page} differs from native {name}")
