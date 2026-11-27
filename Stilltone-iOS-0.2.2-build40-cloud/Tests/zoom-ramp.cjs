@@ -57,6 +57,7 @@ final class Camera {
     func zoomUptime() -> Double { clock }
     ${method('private func stepPresetZoom(')}
     ${method('private func finishPresetZoom(')}
+    ${method('private func interruptPresetZoom(')}
     func advance(to time: Double) { clock = time; stepPresetZoom(at:time) }
     var sizesMP:[Int]=[], input:Input?
     func sizeChoices(_ d:AVCaptureDevice, highResolution:Bool)->[Int]{ [12] }
@@ -148,6 +149,12 @@ final class Camera {
         precondition(increments[0] < increments[1] && increments[1] < increments[2])
         precondition(increments[4] < increments[3] && rear.videoZoomFactor==2 && lens==1 && presetZoom==nil)
         precondition(abs(observed[3] - sqrt(12.0)) < 0.0001)
+        selectLens(2,inputRevision:9,requestID:17)
+        advance(to:clock+0.15)
+        let frozen = rear.videoZoomFactor
+        interruptPresetZoom()
+        advance(to:clock+0.40)
+        precondition(!zoomSettling && presetZoom==nil && zoomTarget==Double(frozen/2) && rear.videoZoomFactor==frozen)
     }
 }
 Camera().check()

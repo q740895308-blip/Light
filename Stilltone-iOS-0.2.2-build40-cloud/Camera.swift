@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 import AVFoundation
 import CoreImage
 import MetalKit
@@ -350,6 +351,9 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
         requestedDisplayZoom = actual
         refreshMacroState(device)
         DispatchQueue.main.async { self.lens = actual; self.zoomTarget = actual; self.zoomSettling = false }
+    }
+    private func interruptPresetZoom() {
+        if let motion = presetZoom, let device = input?.device { finishPresetZoom(device,base:motion.base) }
     }
     @Published private(set) var inputRevision = 0
     private var currentInputRevision = 0
@@ -723,7 +727,7 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
     }
     func stop() { capture.async {
         guard self.active else { return }
-        self.cancelPresetZoom()
+        self.interruptPresetZoom()
         self.cancelZoomFrames()
         self.active = false
         self.hiddenStopGeneration &+= 1
@@ -878,7 +882,7 @@ final class Camera: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBu
         }
     }
     private func suspendPreviewFrames() {
-        cancelPresetZoom()
+        interruptPresetZoom()
         cancelZoomFrames()
         lock.lock()
         acceptingPreviewFrames = false; latest = nil; lastDisplayBuffer = nil; waitingForPreview = nil

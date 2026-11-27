@@ -62,7 +62,7 @@ final class Camera {
     var previewSourceGeneration: UInt64 = 0
     var latestZoomFrame: PresentedZoomFrame?
     func cancelZoomFrames() { latestZoomFrame = nil }
-    func cancelPresetZoom() {}
+    func interruptPresetZoom() {}
     let selected = Recipe()
     var latest: Int?, lastDisplayBuffer: Int?, waitingForPreview: Int?, transitionImage: Int?, visibleTransition: Int?, atlasRequest: Int?, shotID: Int?
     var starts = 0

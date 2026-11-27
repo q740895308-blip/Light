@@ -50,7 +50,7 @@ final class Camera {
     var selected = 0, waitingForPreview: UUID?, latest: Int?, lastDisplayBuffer: Int?
     var latestZoomFrame: Int?
     func cancelZoomFrames() { latestZoomFrame = nil }
-    func cancelPresetZoom() {}
+    func interruptPresetZoom() {}
     func zoomFrameLocked(at pts: CMTime) -> Int? { nil }
     var thumbnails: [Int:Int] = [:]
     func clearPreviewTransition(_ id: UUID, after: Double) {}
