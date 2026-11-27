@@ -336,6 +336,7 @@ private struct GPUPreview: UIViewRepresentable {
                                         bounds:CGRect(origin:.zero,size:size),colorSpace:renderer.space)
                 guard surface == version(), camera.isPreviewSourceCurrent(source) else { slot.signal(); return }
                 command.addCompletedHandler { [slot] _ in slot.signal() }
+                #if !targetEnvironment(simulator)
                 if let zoom {
                     drawable.addPresentedHandler { [weak self] shown in
                         let time = shown.presentedTime
@@ -346,6 +347,7 @@ private struct GPUPreview: UIViewRepresentable {
                         }
                     }
                 }
+                #endif
                 command.present(drawable)
                 command.commit()
             } }
@@ -557,7 +559,11 @@ private struct SharedControls: UIViewRepresentable {
             }
         }
         private var presentsZoomFrames: Bool {
+            #if targetEnvironment(simulator)
+            false
+            #else
             ready && owner.shootViewActive && owner.camera.ready && LiveCameraPreview.metal != nil
+            #endif
         }
         private func enqueueZoomFrame(_ frame:PresentedZoomFrame, at time:Double) {
             guard presentsZoomFrames, time.isFinite, time > lastZoomPresentation else { return }
